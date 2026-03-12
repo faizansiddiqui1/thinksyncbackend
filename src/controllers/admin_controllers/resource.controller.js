@@ -16,6 +16,64 @@ export async function createResource(req, res, next) {
 }
 
 /**
+ * GET /resources
+ * Return all resources (no filters)
+ */
+export async function getAllResources(req, res, next) {
+  try {
+    const resources = await service.getAllResources();
+
+    return res.status(200).json({
+      success: true,
+      count: resources.length,
+      data: resources,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+
+export const addResourceImage = async (req, res) => {
+  try {
+    const img = await service.addResourceImage(
+      req.params.resourceId,
+      req.body,
+      req.user?.id,
+    );
+
+    return res.status(201).json({
+      message: "Image added",
+      data: img,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      message: err.message,
+    });
+  }
+};
+
+
+/**
+ * DELETE /resources/:resourceId/images/:imageId
+ */
+export async function deleteResourceImage(req, res, next) {
+  try {
+    const { resourceId, imageId } = req.params;
+
+    const result = await service.deleteResourceImage(resourceId, imageId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Image deleted successfully",
+      data: result,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
  * GET /space/:spaceId/resources
  */
 export async function listResourcesBySpace(req, res, next) {
@@ -28,7 +86,9 @@ export async function listResourcesBySpace(req, res, next) {
       sort: req.query.sort || "-createdAt",
     };
     const resources = await service.getResourcesBySpace(spaceId, opts);
-    return res.status(200).json({ success: true, count: resources.length, data: resources });
+    return res
+      .status(200)
+      .json({ success: true, count: resources.length, data: resources });
   } catch (err) {
     return next(err);
   }

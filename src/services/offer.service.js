@@ -50,10 +50,20 @@ export const createOffer = async (spaceId, data, userId = null) => {
 
 export const listOffers = async (spaceId) => {
   await ensureSpace(spaceId);
-  const offers = await Offer.find({ space: spaceId, isActive: true })
+  const offers = await Offer.find({ space: spaceId })
     .sort({ validTill: 1, createdAt: -1 })
     .lean()
     .exec();
+  return offers;
+};
+
+export const listAllOffers = async () => {
+  const offers = await Offer.find()
+    .populate("space", "name") // optional (space name show karne ke liye)
+    .sort({ validTill: 1, createdAt: -1 })
+    .lean()
+    .exec();
+
   return offers;
 };
 
@@ -62,7 +72,7 @@ export const updateOffer = async (spaceId, offerId, data, userId = null) => {
 
   if (!mongoose.Types.ObjectId.isValid(offerId)) throw new Error("Invalid offer id");
 
-  const offer = await Offer.findOne({ _id: offerId, space: spaceId, isActive: true });
+  const offer = await Offer.findOne({ _id: offerId, space: spaceId });
   if (!offer) return null;
 
   if (data.code && data.code !== offer.code) {
@@ -103,7 +113,7 @@ export const deleteOffer = async (spaceId, offerId, userId = null) => {
   await ensureSpace(spaceId);
   if (!mongoose.Types.ObjectId.isValid(offerId)) throw new Error("Invalid offer id");
 
-  const offer = await Offer.findOne({ _id: offerId, space: spaceId, isActive: true });
+  const offer = await Offer.findOne({ _id: offerId, space: spaceId });
   if (!offer) return null;
 
   offer.isActive = false;

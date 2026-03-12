@@ -1,29 +1,27 @@
-import bookingService from '../services/bookingService.js';
+import * as bookingService from '../../services/booking.service.js';
 import { validationResult } from 'express-validator';
 
 export const createBooking = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
+      return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const result = await bookingService.createBooking(req.body);
+    // Pass tenantId if provided in body/header, else derive from space
+    const tenantIdOverride = req.body.tenantId || req.header('X-Tenant-Id') || null;
+
+    const result = await bookingService.createBooking(req.body, tenantIdOverride);
     if (!result.success) {
       return res.status(400).json(result);
     }
 
     return res.status(201).json(result);
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
+
 
 export const getBooking = async (req, res) => {
   try {

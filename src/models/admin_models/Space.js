@@ -21,13 +21,13 @@ const addressSchema = new Schema(
         default: "Point",
         required: true,
       },
-      coordinates: { type: [Number], required: true },
+      coordinates: { type: [Number] },
     },
 
     nearbyLandmarks: { type: [String], default: [] },
     timezone: { type: String, default: "Asia/Kolkata" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* =========================
@@ -41,7 +41,7 @@ const amenitySchema = new Schema(
     available: { type: Boolean, default: true },
     description: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* =========================
@@ -63,10 +63,8 @@ const listingPricesSchema = new Schema(
       default: "INR",
     },
   },
-  { _id: false }
+  { _id: false },
 );
-
-
 
 /* =========================
    OPERATING HOURS
@@ -76,8 +74,13 @@ const operatingHoursSchema = new Schema(
     day: {
       type: String,
       enum: [
-        "monday","tuesday","wednesday","thursday",
-        "friday","saturday","sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
       ],
       required: true,
     },
@@ -85,7 +88,7 @@ const operatingHoursSchema = new Schema(
     openTime: { type: String, default: "09:00" },
     closeTime: { type: String, default: "18:00" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* =========================
@@ -93,14 +96,14 @@ const operatingHoursSchema = new Schema(
 ========================= */
 const contactSchema = new Schema(
   {
-    phone: { type: String, required: true },
-    email: { type: String, required: true },
+    phone: { type: String },
+    email: { type: String },
     whatsapp: String,
     managerName: String,
     managerPhone: String,
     managerEmail: String,
   },
-  { _id: false }
+  { _id: false },
 );
 
 const wifiSchema = new Schema(
@@ -109,7 +112,7 @@ const wifiSchema = new Schema(
     speed: String,
     isPaid: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const parkingSchema = new Schema(
@@ -119,7 +122,7 @@ const parkingSchema = new Schema(
     isPaid: { type: Boolean, default: false },
     capacity: Number,
   },
-  { _id: false }
+  { _id: false },
 );
 
 const transportSchema = new Schema(
@@ -131,7 +134,7 @@ const transportSchema = new Schema(
     nearestRailway: String,
     railwayDistance: Number,
   },
-  { _id: false }
+  { _id: false },
 );
 
 const billingSchema = new Schema(
@@ -147,7 +150,7 @@ const billingSchema = new Schema(
       bankName: String,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* =========================
@@ -155,6 +158,13 @@ const billingSchema = new Schema(
 ========================= */
 const spaceSchema = new Schema(
   {
+    owner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+
     name: { type: String, required: true, trim: true },
     slug: { type: String, unique: true, lowercase: true },
 
@@ -170,8 +180,12 @@ const spaceSchema = new Schema(
     spaceType: {
       type: String,
       enum: [
-        "private_office","hot_desk","meeting_room",
-        "dedicated_desk","virtual_office","event_space",
+        "private_office",
+        "hot_desk",
+        "meeting_room",
+        "dedicated_desk",
+        "virtual_office",
+        "event_space",
       ],
       required: true,
     },
@@ -246,7 +260,7 @@ const spaceSchema = new Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 /* =========================
@@ -256,22 +270,11 @@ spaceSchema.pre("validate", function (next) {
   if (this.isNew && !this.slug) {
     this.slug = slugify(this.name, { lower: true, strict: true });
   }
-
   const prices = [];
 
-  // resource prices priority
-  if (this.resources?.length) {
-    this.resources.forEach((r) => {
-      ["hourly","daily","monthly"].forEach((k) => {
-        const v = r?.prices?.[k];
-        if (typeof v === "number" && v >= 0) prices.push(v);
-      });
-    });
-  }
-
   // fallback to listing-level price
-  if (!prices.length && this.listingPrices) {
-    ["hourly","daily","monthly"].forEach((k) => {
+  if (this.listingPrices) {
+    ["hourly", "daily", "monthly"].forEach((k) => {
       const v = this.listingPrices[k];
       if (typeof v === "number" && v >= 0) prices.push(v);
     });
@@ -305,13 +308,11 @@ spaceSchema.virtual("media", {
   justOne: true,
 });
 
-
 spaceSchema.virtual("reviews", {
   ref: "Review",
   localField: "_id",
   foreignField: "space",
 });
-
 
 spaceSchema.virtual("resources", {
   ref: "Resource",
@@ -319,5 +320,16 @@ spaceSchema.virtual("resources", {
   foreignField: "space",
 });
 
+spaceSchema.virtual("pricingPlans", {
+  ref: "PricingPlan",
+  localField: "_id",
+  foreignField: "space",
+});
+
+spaceSchema.virtual("offers", {
+  ref: "Offer",
+  localField: "_id",
+  foreignField: "space",
+});
 
 export default mongoose.model("Space", spaceSchema);

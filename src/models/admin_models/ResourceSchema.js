@@ -12,16 +12,30 @@ const amenitySchema = new Schema(
   { _id: false }
 );
 
+const imageSchema = new Schema(
+  {
+    url: { type: String },
+    s3Key: { type: String },
+    altText: { type: String, default: "" },
+    caption: { type: String, default: "" },
+    order: { type: Number, default: 0 },
+    size: Number,
+  },
+  { _id: true },
+); 
+
 const resourceSchema = new Schema(
   {
     space: { type: Schema.Types.ObjectId, ref: "Space", required: true, index: true }, // link to Space
     name: { type: String, required: true, trim: true },
 
+    foodPrice: { type: Number, trim: true },
     type: {
       type: String,
-      enum: ["meeting_room", "private_cabin", "conference_room", "phone_booth"],
+      enum: ["meeting_room", "private_cabin", "conference_room", "food"],
       required: true,
     },
+    images: [imageSchema],
 
     prices: {
       hourly: { type: Number, min: 0, default: null },

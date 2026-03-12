@@ -23,6 +23,40 @@ const KycSchema = new Schema({
     enum: ["not_submitted", "pending", "approved", "rejected"],
     default: "not_submitted",
   },
+
+  // 👇 ADD THIS BLOCK
+  // config: {
+  //   requireFaceMatch: { type: Boolean, default: true },
+  //   requirePan: { type: Boolean, default: true },
+  //   requireCin: { type: Boolean, default: true },
+  //   requireVideoKyc: { type: Boolean, default: true },
+  //   requireBankCheack: { type: Boolean, default: true },
+  //   requireGstin: { type: Boolean, default: true }
+  // },
+
+/**  ===================================================
+  Direct  add in db 
+  adminprofiles
+  ADD DATA → Insert Document
+  Paste this ⬇️⬇️⬇️
+
+{
+  "owner": null,
+  "company": { "name": "GLOBAL_DEFAULT" },
+  "kyc": {
+    "config": {
+      "requirePan": true,
+      "requireGstin": true,
+      "requireCin": true,
+      "requireCompanyPan": true,
+      "requireBankCheck": true,
+      "requireVideoKyc": false,
+      "requireFaceMatch": false
+    }
+  }
+}
+=================================================== */
+
   submittedAt: Date,
   reviewedAt: Date,
   reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -38,7 +72,6 @@ const AdminProfileSchema = new Schema(
       required: true,
       unique: true,
     },
-    managers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     company: {
       name: String,
       registrationNumber: String,
@@ -52,5 +85,24 @@ const AdminProfileSchema = new Schema(
   },
   { timestamps: true },
 );
+
+AdminProfileSchema.index(
+  { "company.name": 1 },
+  { unique: true, partialFilterExpression: { "company.name": "GLOBAL_DEFAULT" } }
+);
+
+AdminProfileSchema.pre("deleteOne", { document: true }, function (next) {
+  if (this.company?.name === "GLOBAL_DEFAULT") {
+    return next(new Error("Cannot delete global config"));
+  }
+  next();
+});
+
+AdminProfileSchema.pre("deleteMany", function (next) {
+  if (this.getQuery()?.["company.name"] === "GLOBAL_DEFAULT") {
+    return next(new Error("Cannot delete global config"));
+  }
+  next();
+});
 
 export default mongoose.model("AdminProfile", AdminProfileSchema);

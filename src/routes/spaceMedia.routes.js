@@ -10,81 +10,30 @@ import {
   getPresignForImage,
   getPresignForVideo,
 } from "../controllers/admin_controllers/spaceMedia.controller.js";
-
-import { requireAuth } from "../middlewares/auth.js"
-import { requireAdminApproved } from "../middlewares/auth.js";
-import { requireMinRole } from "../middlewares/rbac.js";
+import { requireAuth } from "../middlewares/auth.js";
 
 const router = express.Router();
 
 /* GET media (public or optional auth) */
 router.get("/space/:spaceId/media", getSpaceMedia);
 
-/* PRESIGN */
-router.post(
-  "/space/:spaceId/media/images/presign",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  getPresignForImage
-);
 
 /* ---------- IMAGES ---------- */
-router.post(
-  "/space/:spaceId/media/images",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  addSpaceImage
-);
+router.post("/uploads/presign", getPresignForImage);
 
-router.put(
-  "/space/:spaceId/media/images/:imageId",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  updateSpaceImage
-);
+router.post("/space/:spaceId/media/images", addSpaceImage);
 
-router.delete(
-  "/space/:spaceId/media/images/:imageId",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  deleteSpaceImage
-);
+router.put("/space/:spaceId/media/images/:imageId", updateSpaceImage);
+
+router.delete("/space/:spaceId/media/images/:imageId", deleteSpaceImage);
 
 /* ---------- VIDEO ---------- */
-router.post(
-  "/space/:spaceId/media/video/presign",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  getPresignForVideo
-);
+router.post("/space/:spaceId/media/video/presign", getPresignForVideo);
 
-router.post(
-  "/space/:spaceId/media/video",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  addSpaceVideo
-);
+router.post("/space/:spaceId/media/video", requireAuth, addSpaceVideo);
 
-router.put(
-  "/space/:spaceId/media/video",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  updateSpaceVideo
-);
+router.put("/space/:spaceId/media/video", updateSpaceVideo);
 
-router.delete(
-  "/space/:spaceId/media/video",
-  requireAuth,
-  requireMinRole("admin"),
-  requireAdminApproved,
-  deleteSpaceVideo
-);
+router.delete("/space/:spaceId/media/video", deleteSpaceVideo);
 
 export default router;

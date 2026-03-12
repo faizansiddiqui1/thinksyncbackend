@@ -15,39 +15,120 @@ import {
   createSpace,
   deleteSpace,
   getAllSpaces,
-  getSpaceById,
-  getSpaceBySlug,
+  getFullSpaceById,
+  getFullSpacesForOwner,
+  getSpaceDetailsBySlug,
+  getSpacesList,
+  publishSpaceController,
+  unpublishSpaceController,
   updateSpace,
 } from "../controllers/admin_controllers/space.controller.js";
+import {
+  requireAdminAccess,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
 
 const router = express.Router();
 
-// Create a new space
-router.post("/space-listing/", createSpace);
+router.post(
+  "/space-listing/",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "create"),
+  createSpace,
+);
 
-// Admin Panel Side For location
-router.post("/property/reverse-location", reverseLocationController);
-router.get("/property/autocomplete", autocompleteController);
-router.get("/property/place-details", placeDetailsController);
+router.get(
+  "/get-listing",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  getAllSpaces,
+);
 
+router.get(
+  "/admin/spaces/full",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  getFullSpacesForOwner,
+);
+
+router.get(
+  "/space/:id/full",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  getFullSpaceById,
+);
+
+router.patch(
+  "/space/:id",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "update"),
+  updateSpace,
+);
+
+router.delete(
+  "/space/:id",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "delete"),
+  deleteSpace,
+);
+
+router.post(
+  "/space/:id/publish",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "create"),
+  publishSpaceController,
+);
+
+router.post(
+  "/space/:id/unpublish",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "create"),
+  unpublishSpaceController,
+);
+
+router.post(
+  "/property/reverse-location",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "create"),
+  reverseLocationController,
+);
+
+router.get(
+  "/property/autocomplete",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  autocompleteController,
+);
+
+router.get(
+  "/property/place-details",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  placeDetailsController,
+);
+
+// ===================================================
 // Customer side
+// ===================================================
+
+router.get("/spaces", getSpacesList);
+router.get("/space/:slug", getSpaceDetailsBySlug);
+
+
 router.get("/property/search", searchController);
 router.get("/property/near", nearController);
 router.get("/property/suggest", suggestController);
-
-// Get all spaces (with query params for filtering/pagination)
-router.get("/get-listing", getAllSpaces);
-
-// ===================================================
-// ⚠️ WARNING: Important Notes Slug or ID routes cannot have the same name
-// ===================================================
-router.get("/space/:slug", getSpaceBySlug);
-router.get("/space/id/:id", getSpaceById);
-
-// Update a space by ID
-router.patch("/space/:id", updateSpace);
-
-// Delete a space by ID
-router.delete("/space/:id", deleteSpace);
 
 export default router;

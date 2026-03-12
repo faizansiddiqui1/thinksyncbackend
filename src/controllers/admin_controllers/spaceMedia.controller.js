@@ -4,35 +4,55 @@ import * as service from "../../services/spaceMedia.service.js";
 /* PRESIGN */
 export const getPresignForImage = async (req, res) => {
   try {
-    const { filename, contentType } = req.body;
-    if (!filename || !contentType) {
-      return res.status(400).json({ message: "filename and contentType required" });
+    const { entity, entityId, filename, contentType } = req.body;
+    const userId = req.user?.id;
+
+    if (!entity || !entityId || !filename || !contentType) {
+      return res.status(400).json({
+        message: "entity, entityId, filename and contentType required",
+      });
     }
-    const data = await service.getPresignForImage(req.params.spaceId, filename, contentType, req.user?.id);
-    return res.status(200).json({ message: "Presign generated", data });
+
+    const data = await service.getPresignForImage(
+      entity,
+      entityId,
+      filename,
+      contentType,
+      userId
+    );
+
+    return res.status(200).json({
+      message: "Presign generated",
+      data,
+    });
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }
 };
+
 
 
 /* IMAGES */
 export const addSpaceImage = async (req, res) => {
   try {
-    const img = await service.addImage(req.params.spaceId, req.body, req.user?.id);
+    const img = await service.addImage(
+      req.params.spaceId,
+      req.body,
+      req.user?.id,
+    );
     return res.status(201).json({ message: "Image added", data: img });
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }
 };
-  
+
 export const updateSpaceImage = async (req, res) => {
   try {
     const img = await service.updateImage(
       req.params.spaceId,
       req.params.imageId,
       req.body,
-      req.user?.id
+      req.user?.id,
     );
     return res.status(200).json({ message: "Image updated", data: img });
   } catch (err) {
@@ -42,13 +62,16 @@ export const updateSpaceImage = async (req, res) => {
 
 export const deleteSpaceImage = async (req, res) => {
   try {
-    await service.deleteImage(req.params.spaceId, req.params.imageId, req.user?.id);
+    await service.deleteImage(
+      req.params.spaceId,
+      req.params.imageId,
+      req.user?.id,
+    );
     return res.status(200).json({ message: "Image deleted" });
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }
 };
-
 
 // get Presign for video
 
@@ -57,13 +80,15 @@ export const getPresignForVideo = async (req, res) => {
     const { filename, contentType } = req.body;
 
     if (!filename || !contentType) {
-      return res.status(400).json({ message: "filename and contentType required" });
+      return res
+        .status(400)
+        .json({ message: "filename and contentType required" });
     }
 
     const data = await service.getPresignForVideo(
       req.params.spaceId,
       filename,
-      contentType
+      contentType,
     );
 
     return res.status(200).json({ message: "Video presign generated", data });
@@ -72,12 +97,14 @@ export const getPresignForVideo = async (req, res) => {
   }
 };
 
-
-
-/* VIDEO */
+/* VIDEO Controller */
 export const addSpaceVideo = async (req, res) => {
   try {
-    const video = await service.addVideo(req.params.spaceId, req.body, req.user?.id);
+    const video = await service.addVideo(
+      req.params.spaceId,
+      req.body,
+      req.user?.id,
+    );
     return res.status(201).json({ message: "Video added", data: video });
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -86,7 +113,11 @@ export const addSpaceVideo = async (req, res) => {
 
 export const updateSpaceVideo = async (req, res) => {
   try {
-    const video = await service.updateVideo(req.params.spaceId, req.body, req.user?.id);
+    const video = await service.updateVideo(
+      req.params.spaceId,
+      req.body,
+      req.user?.id,
+    );
     return res.status(200).json({ message: "Video updated", data: video });
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -103,10 +134,22 @@ export const deleteSpaceVideo = async (req, res) => {
 };
 
 /* GET media (optional) */
+// controllers/admin_controllers/spaceMedia.controller.js
+
 export const getSpaceMedia = async (req, res) => {
   try {
     const media = await service.getMediaBySpace(req.params.spaceId);
-    return res.status(200).json({ message: "Media retrieved", data: media || {} });
+
+    // only return what frontend needs
+    return res.status(200).json({
+      message: "Media retrieved",
+      data: media
+        ? {
+            images: media.images || [],
+            video: media.video || null,
+          }
+        : { images: [], video: null },
+    });
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }

@@ -12,6 +12,24 @@ export const createPricingPlan = async (req, res) => {
   }
 };
 
+export const listAllPricingPlans = async (req, res) => {
+  try {
+    const plans = await service.listAllPlans();
+
+    if (!plans || plans.length === 0) {
+      return res.status(404).json({ message: "No pricing plans found" });
+    }
+
+    return res.status(200).json({
+      message: "All pricing plans fetched",
+      data: plans,
+    });
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+
 export const listPricingPlans = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;

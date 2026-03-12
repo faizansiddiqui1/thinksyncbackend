@@ -1,43 +1,89 @@
-import Booking from '../models/Booking.js';
-import Space from '../models/Space.js';
-import dayjs from 'dayjs';
+import Booking from "../models/user_models/Booking.js";
+import Space from "../models/admin_models/Space.js";
+import dayjs from "dayjs";
+import { resolveGateway } from "../services/paymentGatewayResolver.service.js";
+import * as cashfreeService from "../services/cashfree.service.js";
+import * as razorpayService from "../services/razorpay.service.js";
+import { getTenantIdFromSpace } from "../utils/getTenantIdFromSpace.js";
+import mongoose from "mongoose";
+import TempBooking from "../models/user_models/TempBooking.js";
 
 /* =========================
-   Create Booking
+   Create Booking 
 ========================= */
-export const createBooking = async (bookingData) => {
+
+export const createBooking = async (bookingData, tenantIdOverride = null) => {
   try {
-    const { space, bookingDuration, resource } = bookingData;
+    const { space: spaceId, bookingDuration, plan } = bookingData;
 
-    const spaceExists = await Space.findById(space);
-    if (!spaceExists) {
-      return { success: false, error: 'Space not found' };
+    const customerPayload = bookingData.customer || bookingData.user || {};
+
+    const space = await Space.findById(spaceId)
+      .populate("resources")
+      .populate("pricingPlans");
+
+    if (!space || !space.isPublished) {
+      return { success: false, error: "Space not found" };
     }
 
-    const hasOverlap = await Booking.checkOverlap(
-      space,
-      bookingDuration.startDate,
-      bookingDuration.endDate,
-      resource?.resourceId
-    );
+    /* ===== PRICE CALC ===== */
 
-    if (hasOverlap) {
-      return {
-        success: false,
-        error: 'Booking conflicts with existing reservation'
-      };
+    const basePrice =
+      space.pricingPlans.find((p) => p._id.toString() === plan?.planId)?.price || 0;
+
+    let resourceTotal = 0;
+
+    if (Array.isArray(bookingData.resources)) {
+      bookingData.resources.forEach((r) => {
+        const res = space.resources.find((sr) => sr._id.toString() === r.resourceId);
+        if (res) resourceTotal += (res.prices?.[plan?.type] || 0) * r.qty;
+      });
     }
 
-    const booking = new Booking(bookingData);
-    booking.calculateDuration();
-    await booking.save();
+    const totalAmount = basePrice + resourceTotal;
 
-    await Space.findByIdAndUpdate(space, {
-      $inc: { 'analytics.bookings': 1 }
+    /* ===== CREATE PAYMENT ONLY ===== */
+
+    const tenantId = tenantIdOverride || (await getTenantIdFromSpace(spaceId));
+    const gatewayResolved = await resolveGateway(tenantId);
+
+    const orderId = `booking_${new mongoose.Types.ObjectId()}`;
+
+    let paymentData;
+
+    if (gatewayResolved.gateway === "cashfree") {
+      paymentData = await cashfreeService.createCashfreeOrder({
+        credentials: gatewayResolved.credentials,
+        orderId,
+        amount: totalAmount,
+        currency: "INR",
+        customer: {
+          name: customerPayload.name || "Test User",
+          email: customerPayload.email || "test@test.com",
+          phone: customerPayload.phone || "9999999999",
+        },
+      });
+    }
+
+    /* ===== SAVE TEMP ONLY ===== */
+
+    await TempBooking.create({
+      orderId,
+      bookingData,
+      totalAmount,
     });
 
-    return { success: true, data: booking };
+    console.log("👉 SESSION:", paymentData.payment_session_id);
+
+    return {
+      success: true,
+      data: {
+        orderId,
+        payment: paymentData,
+      },
+    };
   } catch (error) {
+    console.error("createBooking error:", error.message);
     return { success: false, error: error.message };
   }
 };
@@ -48,11 +94,11 @@ export const createBooking = async (bookingData) => {
 export const getBookingById = async (id) => {
   try {
     const booking = await Booking.findById(id)
-      .populate('space')
-      .populate('user.userId');
+      .populate("space")
+      .populate("user.userId");
 
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
     return { success: true, data: booking };
@@ -68,16 +114,16 @@ export const getUserBookings = async (userId, filters = {}) => {
   try {
     const { status, upcoming, past, page = 1, limit = 20 } = filters;
 
-    const query = { 'user.userId': userId };
+    const query = { "user.userId": userId };
 
     if (status) query.status = status;
-    if (upcoming) query['bookingDuration.startDate'] = { $gte: new Date() };
-    if (past) query['bookingDuration.endDate'] = { $lt: new Date() };
+    if (upcoming) query["bookingDuration.startDate"] = { $gte: new Date() };
+    if (past) query["bookingDuration.endDate"] = { $lt: new Date() };
 
     const skip = (page - 1) * limit;
 
     const bookings = await Booking.find(query)
-      .populate('space', 'name slug images address')
+      .populate("space", "name slug images address")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -92,9 +138,9 @@ export const getUserBookings = async (userId, filters = {}) => {
           page,
           limit,
           total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+          pages: Math.ceil(total / limit),
+        },
+      },
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -113,16 +159,19 @@ export const getSpaceBookings = async (spaceId, filters = {}) => {
     if (status) query.status = status;
 
     if (startDate || endDate) {
-      query['bookingDuration.startDate'] = {};
-      if (startDate) query['bookingDuration.startDate'].$gte = new Date(startDate);
-      if (endDate) query['bookingDuration.endDate'].$lte = new Date(endDate);
+      query["bookingDuration.startDate"] = {};
+      if (startDate)
+        query["bookingDuration.startDate"] = { $lte: new Date(endDate) };
+
+      if (endDate)
+        query["bookingDuration.endDate"] = { $gte: new Date(startDate) };
     }
 
     const skip = (page - 1) * limit;
 
     const bookings = await Booking.find(query)
-      .populate('user.userId', 'name email phone')
-      .sort({ 'bookingDuration.startDate': 1 })
+      .populate("user.userId", "name email phone")
+      .sort({ "bookingDuration.startDate": 1 })
       .skip(skip)
       .limit(limit);
 
@@ -136,9 +185,9 @@ export const getSpaceBookings = async (spaceId, filters = {}) => {
           page,
           limit,
           total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+          pages: Math.ceil(total / limit),
+        },
+      },
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -148,17 +197,17 @@ export const getSpaceBookings = async (spaceId, filters = {}) => {
 /* =========================
    Update Booking Status
 ========================= */
-export const updateBookingStatus = async (id, status, notes = '') => {
+export const updateBookingStatus = async (id, status, notes = "") => {
   try {
     const booking = await Booking.findById(id);
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
     booking.status = status;
     if (notes) booking.adminNotes = notes;
 
-    if (status === 'confirmed' && booking.payment.status === 'paid') {
+    if (status === "confirmed" && booking.payment.status === "paid") {
       booking.invoice.invoiceDate = new Date();
     }
 
@@ -172,20 +221,20 @@ export const updateBookingStatus = async (id, status, notes = '') => {
 /* =========================
    Cancel Booking
 ========================= */
-export const cancelBooking = async (id, cancelledBy, reason = '') => {
+export const cancelBooking = async (id, cancelledBy, reason = "") => {
   try {
-    const booking = await Booking.findById(id).populate('space');
+    const booking = await Booking.findById(id).populate("space");
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
-    if (booking.status === 'cancelled') {
-      return { success: false, error: 'Booking already cancelled' };
+    if (booking.status === "cancelled") {
+      return { success: false, error: "Booking already cancelled" };
     }
 
     const hoursUntilStart = dayjs(booking.bookingDuration.startDate).diff(
       dayjs(),
-      'hour'
+      "hour",
     );
 
     let refundAmount = 0;
@@ -195,16 +244,16 @@ export const cancelBooking = async (id, cancelledBy, reason = '') => {
       refundAmount = booking.priceBreakdown.totalAmount * 0.5;
     }
 
-    booking.status = 'cancelled';
+    booking.status = "cancelled";
     booking.cancellation = {
       cancelledBy,
       cancelledAt: new Date(),
       reason,
-      refundAmount
+      refundAmount,
     };
 
-    if (refundAmount > 0 && booking.payment.status === 'paid') {
-      booking.payment.status = 'refunded';
+    if (refundAmount > 0 && booking.payment.status === "paid") {
+      booking.payment.status = "refunded";
       booking.payment.refundedAt = new Date();
       booking.payment.refundAmount = refundAmount;
     }
@@ -223,11 +272,11 @@ export const checkIn = async (id) => {
   try {
     const booking = await Booking.findById(id);
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
-    if (booking.status !== 'confirmed') {
-      return { success: false, error: 'Booking not confirmed' };
+    if (booking.status !== "confirmed") {
+      return { success: false, error: "Booking not confirmed" };
     }
 
     booking.checkIn.status = true;
@@ -244,19 +293,19 @@ export const checkOut = async (id) => {
   try {
     const booking = await Booking.findById(id);
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
     if (!booking.checkIn.status) {
       return {
         success: false,
-        error: 'Must check in before checking out'
+        error: "Must check in before checking out",
       };
     }
 
     booking.checkOut.status = true;
     booking.checkOut.time = new Date();
-    booking.status = 'completed';
+    booking.status = "completed";
     await booking.save();
 
     return { success: true, data: booking };
@@ -272,20 +321,18 @@ export const updatePaymentStatus = async (id, paymentData) => {
   try {
     const booking = await Booking.findById(id);
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      return { success: false, error: "Booking not found" };
     }
 
     booking.payment = {
       ...booking.payment,
       ...paymentData,
       paidAt:
-        paymentData.status === 'paid'
-          ? new Date()
-          : booking.payment.paidAt
+        paymentData.status === "paid" ? new Date() : booking.payment.paidAt,
     };
 
-    if (paymentData.status === 'paid') {
-      booking.status = 'confirmed';
+    if (paymentData.status === "paid") {
+      booking.status = "confirmed";
     }
 
     await booking.save();
@@ -312,14 +359,14 @@ export const getBookingStats = async (spaceId, startDate, endDate) => {
 
     const stats = {
       total: bookings.length,
-      confirmed: bookings.filter(b => b.status === 'confirmed').length,
-      cancelled: bookings.filter(b => b.status === 'cancelled').length,
-      completed: bookings.filter(b => b.status === 'completed').length,
-      pending: bookings.filter(b => b.status === 'pending').length,
+      confirmed: bookings.filter((b) => b.status === "confirmed").length,
+      cancelled: bookings.filter((b) => b.status === "cancelled").length,
+      completed: bookings.filter((b) => b.status === "completed").length,
+      pending: bookings.filter((b) => b.status === "pending").length,
       totalRevenue: bookings
-        .filter(b => b.payment.status === 'paid')
+        .filter((b) => b.payment.status === "paid")
         .reduce((sum, b) => sum + b.priceBreakdown.totalAmount, 0),
-      avgBookingValue: 0
+      avgBookingValue: 0,
     };
 
     if (stats.total > 0) {

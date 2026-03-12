@@ -17,7 +17,7 @@ const imageSchema = new Schema(
 const videoSchema = new Schema(
   {
     url: String,
-    s3Key: { type: String }, // <-- add this
+    s3Key: { type: String }, 
     provider: {
       type: String,
       enum: ["youtube", "vimeo", "custom"],

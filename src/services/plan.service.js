@@ -58,9 +58,18 @@ export const createPlan = async (spaceId, data, userId = null) => {
   return plan.toObject ? plan.toObject() : plan;
 };
 
+export const listAllPlans = async () => {
+  const plans = await PricingPlan.find({})
+    .populate("space", "name")
+    .sort({ createdAt: -1 })
+    .lean()
+    .exec();
+
+  return plans;
+};
 export const listPlans = async (spaceId) => {
   await ensureSpace(spaceId);
-  const plans = await PricingPlan.find({ space: spaceId, isActive: true })
+  const plans = await PricingPlan.find({ space: spaceId })
     .sort({ order: 1 })
     .lean()
     .exec();
@@ -73,7 +82,7 @@ export const updatePlan = async (spaceId, planId, data, userId = null) => {
   if (!mongoose.Types.ObjectId.isValid(planId)) throw new Error("Invalid plan id");
 
   // only update active plans
-  const plan = await PricingPlan.findOne({ _id: planId, space: spaceId, isActive: true });
+  const plan = await PricingPlan.findOne({ _id: planId, space: spaceId });
   if (!plan) return null;
 
   // if changing type, ensure no other active plan has same type
@@ -117,7 +126,7 @@ export const deletePlan = async (spaceId, planId, userId = null) => {
   if (!mongoose.Types.ObjectId.isValid(planId)) throw new Error("Invalid plan id");
 
   // only soft-delete active plans
-  const plan = await PricingPlan.findOne({ _id: planId, space: spaceId, isActive: true });
+  const plan = await PricingPlan.findOne({ _id: planId, space: spaceId });
   if (!plan) return null;
 
   plan.isActive = false;

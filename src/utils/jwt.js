@@ -7,7 +7,7 @@ export const accessToken = (payload) => {
   return jwt.sign(
     payload,
     process.env.JWT_ACCESS_SECRET,
-    { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' }
+    { expiresIn: process.env.JWT_ACCESS_EXPIRY || '60m' }
   );
 };
 

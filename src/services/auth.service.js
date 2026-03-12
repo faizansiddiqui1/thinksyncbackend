@@ -87,7 +87,7 @@ const ensureAdminProfile = async (ownerId) => {
   if (existing) return existing;
   return AdminProfile.create({
     owner: ownerId,
-    kyc: { status: "pending", submittedAt: new Date() },
+    kyc: { status: "not_submitted", submittedAt: new Date() }, // Changed to "not_submitted" for accuracy; "pending" after submission
   });
 };
 
@@ -225,25 +225,22 @@ export const verifyOTPAndCreateTokens = async (
     .toLowerCase();
 
   if (normalizedIntent === "admin") {
-    // ensure admin profile exists (you already do)
+    // ensure admin profile exists
     await ensureAdminProfile(user._id);
+    // Set pending_admin if not already a higher role
+    if (user.role !== "admin" && user.role !== "super_admin") {
+      user.role = "pending_admin";
+    }
   }
   if (normalizedIntent && normalizedIntent !== "admin") {
     throw new Error("Invalid intent");
-  }
-
-  if (normalizedIntent === "admin") {
-    if (user.role !== "admin" && user.role !== "super_admin") {
-      user.role = "admin";
-    }
-    await ensureAdminProfile(user._id);
   }
 
   // JWT Tokens
   const accessToken = jwt.sign(
     { userId: user._id },
     process.env.JWT_ACCESS_SECRET,
-    { expiresIn: "15m" },
+    { expiresIn: "60m" },
   );
 
   const refreshToken = jwt.sign(

@@ -26,6 +26,40 @@ const KycSchema = new Schema(
       enum: ["not_submitted", "pending", "approved", "rejected"],
       default: "not_submitted",
     },
+
+    aadhaar: {
+      url: String,
+      s3Key: String,
+      uploadedAt: Date,
+      ocr: {
+        raw: Object,
+        verified: Boolean,
+      },
+    },
+    selfie: {
+      url: String,
+      s3Key: String,
+      uploadedAt: Date,
+    },
+    pan: {
+      url: String,
+      s3Key: String,
+      uploadedAt: Date,
+      data: Object,
+    },
+    cin: {
+      url: String,
+      s3Key: String,
+      uploadedAt: Date,
+      data: Object,
+    },
+    gst: {
+      url: String,
+      s3Key: String,
+      uploadedAt: Date,
+      data: Object,
+    },
+
     submittedAt: Date,
     reviewedAt: Date,
     data: { type: Schema.Types.Mixed },
@@ -81,7 +115,12 @@ const userSchema = new Schema(
     emailVerified: { type: Boolean, default: false },
     role: {
       type: String,
-      enum: ["user", "manager", "admin", "super_admin", "customer"],
+      enum: [
+        "user",
+        "admin",
+        "super_admin",
+        "pending_admin",
+      ],
       default: "user",
     },
     customRoles: [
@@ -158,3 +197,4 @@ userSchema.methods.toJSON = function () {
 
 const User = mongoose.model("User", userSchema);
 export default User;
+            

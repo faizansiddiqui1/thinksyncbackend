@@ -1,5 +1,5 @@
 // lib/s3.js
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const region = process.env.AWS_REGION;
@@ -21,6 +21,8 @@ export const s3 = new S3Client({
  * Create presigned PUT URL for direct browser upload.
  * returns { uploadUrl, key }
  */
+
+
 export const createPresignedUpload = async ({ key, contentType, expiresSeconds = 900 }) => {
   const cmd = new PutObjectCommand({
     Bucket: bucket,
@@ -45,5 +47,23 @@ export const createSignedGetUrl = async ({ key, expiresSeconds = 900 }) => {
  * Public URL for object when bucket/object is publicly readable (or accessed via CloudFront)
  */
 export const publicUrlForKey = ({ key }) => {
-  return `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${encodeURIComponent(key)}`;
+  return `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${encodeURIComponent(key)}`;
+};
+
+
+export const deleteFromStorage = async (key) => {
+  if (!key) return false;
+
+  const cmd = new DeleteObjectCommand({
+    Bucket: bucket,
+    Key: key,
+  });
+
+  try {
+    await s3.send(cmd);
+    return true;
+  } catch (err) {
+    console.error("S3 delete failed:", err);
+    throw new Error("Failed to delete file from storage");
+  }
 };

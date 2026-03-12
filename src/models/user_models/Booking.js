@@ -1,4 +1,6 @@
-import mongoose from 'mongoose';
+// models/user_models/Booking.js (updated with price calc hook)
+import mongoose from "mongoose";
+import PricingPlan from "../../models/admin_models/PricingPlan.js"; // Assume exists
 
 const priceBreakdownSchema = new mongoose.Schema(
   {
@@ -7,39 +9,52 @@ const priceBreakdownSchema = new mongoose.Schema(
     gstAmount: { type: Number, required: true },
     deposit: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
-    totalAmount: { type: Number, required: true }
+    totalAmount: { type: Number, required: true },
   },
-  { _id: false }
+  { _id: false },
+);
+
+const resourceItemSchema = new mongoose.Schema(
+  {
+    resourceId: { type: mongoose.Schema.Types.ObjectId },
+    name: String,
+    type: String,
+    unitPrice: { type: Number, default: 0 },
+    qty: { type: Number, default: 1 },
+  },
+  { _id: false },
 );
 
 const bookingSchema = new mongoose.Schema(
   {
     user: {
-      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       name: { type: String, required: true },
       email: { type: String, required: true },
-      phone: { type: String, required: true }
+      phone: { type: String, required: true },
     },
 
     space: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Space',
-      required: true
+      ref: "Space",
+      required: true,
     },
 
-    resource: {
-      resourceId: { type: mongoose.Schema.Types.ObjectId },
-      name: { type: String },
-      type: { type: String }
+    // ===============================
+    // ✅ RESOURCE ARRAY (FIXED)
+    // ===============================
+    resources: {
+      type: [resourceItemSchema],
+      default: [],
     },
 
     plan: {
-      planId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      planId: { type: mongoose.Schema.Types.ObjectId },
       type: {
         type: String,
-        enum: ['hourly', 'daily', 'monthly', 'yearly'],
-        required: true
-      }
+        enum: ["hourly", "daily", "monthly", "yearly"],
+        required: true,
+      },
     },
 
     bookingDuration: {
@@ -48,55 +63,56 @@ const bookingSchema = new mongoose.Schema(
       startTime: { type: String },
       endTime: { type: String },
       totalDays: { type: Number },
-      totalHours: { type: Number }
+      totalHours: { type: Number },
     },
 
     quantity: {
       seats: { type: Number, default: 1 },
-      units: { type: Number, default: 1 }
+      units: { type: Number, default: 1 },
     },
 
     priceBreakdown: {
       type: priceBreakdownSchema,
-      required: true
+      default: () => ({}), // ⭐⭐⭐ FINAL FIX
     },
 
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'cancelled', 'completed', 'no_show'],
-      default: 'pending'
+      enum: ["pending", "confirmed", "cancelled", "completed", "no_show"],
+      default: "pending",
     },
 
     payment: {
       method: {
         type: String,
-        enum: ['cash', 'card', 'upi', 'netbanking', 'wallet']
+        enum: ["cash", "card", "upi", "netbanking", "wallet"],
       },
       status: {
         type: String,
-        enum: ['pending', 'paid', 'refunded', 'failed'],
-        default: 'pending'
+        enum: ["pending", "paid", "refunded", "failed"],
+        default: "pending",
       },
+      reference: String, // e.g., order_id from gateway
       transactionId: String,
       paidAt: Date,
       refundedAt: Date,
-      refundAmount: Number
+      refundAmount: Number,
     },
 
     invoice: {
       invoiceNumber: { type: String, unique: true, sparse: true },
       invoiceDate: Date,
-      invoiceUrl: String
+      invoiceUrl: String,
     },
 
     checkIn: {
       time: Date,
-      status: { type: Boolean, default: false }
+      status: { type: Boolean, default: false },
     },
 
     checkOut: {
       time: Date,
-      status: { type: Boolean, default: false }
+      status: { type: Boolean, default: false },
     },
 
     specialRequests: String,
@@ -104,91 +120,122 @@ const bookingSchema = new mongoose.Schema(
     cancellation: {
       cancelledBy: {
         type: String,
-        enum: ['user', 'admin', 'system']
+        enum: ["user", "admin", "system"],
       },
       cancelledAt: Date,
       reason: String,
-      refundAmount: Number
+      refundAmount: Number,
     },
 
     notes: String,
-    adminNotes: String
+    adminNotes: String,
   },
   {
-    timestamps: true
-  }
+    timestamps: true,
+  },
 );
 
-/* =========================
-   Hooks
-========================= */
+// Pre-save hook for price calc (demo integration with PricingPlan)
+// ===============================
+// 🔥 PRICE + VALIDATION HOOK
+// ===============================
+bookingSchema.pre("validate", async function (next) {
+  try {
+    if (!this.isNew) return next();
 
-bookingSchema.pre('save', function (next) {
-  if (this.status === 'confirmed' && !this.invoice?.invoiceNumber) {
-    const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 1000);
+    if (!this.priceBreakdown) this.priceBreakdown = {};
 
-    this.invoice = this.invoice || {};
-    this.invoice.invoiceNumber = `INV-${timestamp}-${random}`;
-    this.invoice.invoiceDate = new Date();
+    this.calculateDuration();
+
+    const units = this.quantity?.units || 1;
+
+    // 🔥 correct duration logic
+    let duration = 1;
+    if (this.plan?.type === "hourly") {
+      duration = this.bookingDuration.totalHours || 1;
+    } else {
+      duration = this.bookingDuration.totalDays || 1;
+    }
+
+    let baseAmount = 0;
+
+    // ✅ PLAN PRICE
+    if (this.plan?.planId) {
+      const plan = await PricingPlan.findById(this.plan.planId);
+      if (!plan) return next(new Error("Invalid pricing plan"));
+
+      baseAmount += (plan.price || 0) * units * duration;
+    }
+
+    // ✅ RESOURCE PRICE
+    if (Array.isArray(this.resources)) {
+      this.resources.forEach((r) => {
+        baseAmount += Number(r.unitPrice || 0) * Number(r.qty || 1);
+      });
+    }
+
+    if (!baseAmount)
+      return next(new Error("Unable to calculate booking price"));
+
+    const gst = Math.round(baseAmount * 0.18);
+
+    this.priceBreakdown.basePrice = baseAmount;
+    this.priceBreakdown.gstPercentage = 18;
+    this.priceBreakdown.gstAmount = gst;
+    this.priceBreakdown.deposit = 0;
+    this.priceBreakdown.discount = 0;
+    this.priceBreakdown.totalAmount = baseAmount + gst;
+
+    next();
+  } catch (err) {
+    next(err);
   }
-  next();
 });
 
-/* =========================
-   Instance Methods
-========================= */
-
+// ===============================
+// 🔥 DURATION METHOD (FIXED)
+// ===============================
 bookingSchema.methods.calculateDuration = function () {
+  if (!this.bookingDuration?.startDate || !this.bookingDuration?.endDate)
+    return;
+
   const start = new Date(this.bookingDuration.startDate);
   const end = new Date(this.bookingDuration.endDate);
 
   const diffTime = Math.abs(end - start);
-  this.bookingDuration.totalDays = Math.ceil(
-    diffTime / (1000 * 60 * 60 * 24)
-  );
-  this.bookingDuration.totalHours = Math.ceil(
-    diffTime / (1000 * 60 * 60)
-  );
+
+  this.bookingDuration.totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  this.bookingDuration.totalHours = Math.ceil(diffTime / (1000 * 60 * 60));
 };
 
-/* =========================
-   Static Methods
-========================= */
-
+// ===============================
+// 🔥 OVERLAP CHECK (FIXED FOR MULTI RESOURCE)
+// ===============================
 bookingSchema.statics.checkOverlap = async function (
   spaceId,
   startDate,
   endDate,
-  resourceId = null
+  resourceIds = [],
 ) {
   const query = {
     space: spaceId,
-    status: { $in: ['confirmed', 'pending'] },
-    $or: [
-      {
-        'bookingDuration.startDate': { $lte: endDate },
-        'bookingDuration.endDate': { $gte: startDate }
-      }
-    ]
+    status: { $in: ["confirmed", "pending"] },
+    "bookingDuration.startDate": { $lte: endDate },
+    "bookingDuration.endDate": { $gte: startDate },
   };
 
-  if (resourceId) {
-    query['resource.resourceId'] = resourceId;
+  if (resourceIds.length > 0) {
+    query["resources.resourceId"] = { $in: resourceIds };
   }
 
-  const overlappingBookings = await this.find(query);
-  return overlappingBookings.length > 0;
+  return (await this.find(query)).length > 0;
 };
 
-/* =========================
-   Indexes
-========================= */
-
-bookingSchema.index({ space: 1, 'bookingDuration.startDate': 1 });
-bookingSchema.index({ 'user.userId': 1, createdAt: -1 });
+bookingSchema.index({ space: 1, "bookingDuration.startDate": 1 });
+bookingSchema.index({ "user.userId": 1, createdAt: -1 });
 bookingSchema.index({ status: 1 });
-bookingSchema.index({ 'payment.status': 1 });
-bookingSchema.index({ 'invoice.invoiceNumber': 1 });
+bookingSchema.index({ "payment.status": 1 });
+bookingSchema.index({ "invoice.invoiceNumber": 1 });
 
-export default mongoose.model('Booking', bookingSchema);
+export default mongoose.model("Booking", bookingSchema);

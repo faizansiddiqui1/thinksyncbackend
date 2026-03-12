@@ -13,7 +13,7 @@ const pricingPlanSchema = new Schema(
 
     type: {
       type: String,
-      enum: ["hourly", "daily", "monthly"],
+      enum: ["hourly", "daily", "monthly", "weekly"],
       required: true,
     },
 

@@ -23,6 +23,24 @@ export const listOffers = async (req, res) => {
   }
 };
 
+
+export const listAllOffers = async (req, res) => {
+  try {
+    const offers = await service.listAllOffers();
+
+    if (!offers || offers.length === 0) {
+      return res.status(404).json({ message: "No active offers found" });
+    }
+
+    return res.status(200).json({
+      message: "All offers fetched successfully",
+      data: offers,
+    });
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+};
+
 export const updateOffer = async (req, res) => {
   try {
     const { spaceId, offerId } = req.params;
