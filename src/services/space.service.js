@@ -57,6 +57,8 @@ export const createSpace = async (spaceData, userId = null) => {
     throw error;
   }
 };
+
+
 // Get all Spaces
 // service: getAllSpaces(rawQuery = {}, options = {})
 export const getAllSpaces = async (rawQuery = {}, options = {}) => {

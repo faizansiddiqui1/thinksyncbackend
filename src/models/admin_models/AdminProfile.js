@@ -34,8 +34,8 @@ const KycSchema = new Schema({
   //   requireGstin: { type: Boolean, default: true }
   // },
 
-/**  ===================================================
-  Direct  add in db 
+  /**  ===================================================
+  Direct  add in db in under adminProfile
   adminprofiles
   ADD DATA → Insert Document
   Paste this ⬇️⬇️⬇️
@@ -50,7 +50,7 @@ const KycSchema = new Schema({
       "requireCin": true,
       "requireCompanyPan": true,
       "requireBankCheck": true,
-      "requireVideoKyc": false,
+      requireAadhaar: true,
       "requireFaceMatch": false
     }
   }
@@ -79,6 +79,20 @@ const AdminProfileSchema = new Schema(
       placeholderImageKey: String, // for pictures
       legalDocuments: [DocumentSchema],
     },
+    // models/admin_models/AdminProfile.js
+
+    whiteLabel: {
+      status: {
+        type: String,
+        enum: ["pending", "approved", "rejected"],
+        default: "pending",
+      },
+      approvedAt: Date,
+      approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User", // super admin
+      },
+    },
     kyc: { type: KycSchema, default: () => ({}) },
     createdAt: Date,
     updatedAt: Date,
@@ -88,7 +102,10 @@ const AdminProfileSchema = new Schema(
 
 AdminProfileSchema.index(
   { "company.name": 1 },
-  { unique: true, partialFilterExpression: { "company.name": "GLOBAL_DEFAULT" } }
+  {
+    unique: true,
+    partialFilterExpression: { "company.name": "GLOBAL_DEFAULT" },
+  },
 );
 
 AdminProfileSchema.pre("deleteOne", { document: true }, function (next) {

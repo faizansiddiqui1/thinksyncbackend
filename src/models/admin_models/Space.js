@@ -52,10 +52,12 @@ const listingPricesSchema = new Schema(
     show: {
       hourly: { type: Boolean, default: false },
       daily: { type: Boolean, default: false },
+      weekly: { type: Boolean, default: false },
       monthly: { type: Boolean, default: false },
     },
     hourly: { type: Number, min: 0, default: null },
     daily: { type: Number, min: 0, default: null },
+    weekly: { type: Number, min: 0, default: null },
     monthly: { type: Number, min: 0, default: null },
     currency: {
       type: String,
@@ -181,15 +183,35 @@ const spaceSchema = new Schema(
       type: String,
       enum: [
         "private_office",
-        "hot_desk",
-        "meeting_room",
-        "dedicated_desk",
+        "managed_office",
         "virtual_office",
         "event_space",
       ],
       required: true,
     },
 
+    inventory: {
+      total: { type: Number, default: 0 }, // total offices
+      available: { type: Number, default: 0 }, // available now
+      booked: { type: Number, default: 0 }, // already booked
+      startDateTime: Date,
+      endDateTime: Date,
+    },
+
+    bookingRules: {
+      supportsHourly: { type: Boolean, default: true },
+      supportsDaily: { type: Boolean, default: true },
+      supportsWeekly: { type: Boolean, default: true },
+      supportsMonthly: { type: Boolean, default: true },
+      bufferMinutes: { type: Number, default: 0 },
+    },
+    blackoutDates: [
+      {
+        startDateTime: Date,
+        endDateTime: Date,
+        reason: String,
+      },
+    ],
     // NEW listing level prices
     listingPrices: { type: listingPricesSchema, default: () => ({}) },
 
@@ -274,10 +296,10 @@ spaceSchema.pre("validate", function (next) {
 
   // fallback to listing-level price
   if (this.listingPrices) {
-    ["hourly", "daily", "monthly"].forEach((k) => {
+    ["hourly", "daily", "weekly", "monthly"].forEach((k) => {
       const v = this.listingPrices[k];
       if (typeof v === "number" && v >= 0) prices.push(v);
-    });
+    });  
   }
 
   if (prices.length) {

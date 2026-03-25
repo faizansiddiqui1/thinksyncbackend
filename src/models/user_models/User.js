@@ -106,6 +106,20 @@ const userSchema = new Schema(
       },
     },
 
+    // inside userSchema definition
+    pendingEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+    },
+    pendingEmailRequestedAt: Date,
+
+    pendingPhone: {
+      type: String,
+      trim: true,
+    },
+    pendingPhoneRequestedAt: Date,
+
     password: {
       type: String,
       select: false, // hide by default
@@ -115,12 +129,7 @@ const userSchema = new Schema(
     emailVerified: { type: Boolean, default: false },
     role: {
       type: String,
-      enum: [
-        "user",
-        "admin",
-        "super_admin",
-        "pending_admin",
-      ],
+      enum: ["user", "admin", "super_admin", "pending_admin"],
       default: "user",
     },
     customRoles: [
@@ -197,4 +206,3 @@ userSchema.methods.toJSON = function () {
 
 const User = mongoose.model("User", userSchema);
 export default User;
-            

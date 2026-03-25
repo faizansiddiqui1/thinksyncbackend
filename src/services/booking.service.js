@@ -7,6 +7,8 @@ import * as razorpayService from "../services/razorpay.service.js";
 import { getTenantIdFromSpace } from "../utils/getTenantIdFromSpace.js";
 import mongoose from "mongoose";
 import TempBooking from "../models/user_models/TempBooking.js";
+import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
+import User from "../models/user_models/User.js";
 
 /* =========================
    Create Booking 
@@ -14,77 +16,199 @@ import TempBooking from "../models/user_models/TempBooking.js";
 
 export const createBooking = async (bookingData, tenantIdOverride = null) => {
   try {
-    const { space: spaceId, bookingDuration, plan } = bookingData;
+    const {
+      space: spaceId,
+      bookingDuration,
+      plan,
+      quantity,
+      resources = [],
+      couponCode: rawCouponCode, // optional
+    } = bookingData;
 
     const customerPayload = bookingData.customer || bookingData.user || {};
 
+    let dbUser = null;
+
+    if (bookingData.userId) {
+      dbUser = await User.findById(bookingData.userId);
+    }
+
+    if (!dbUser) {
+      return { success: false, error: "User not found" };
+    }
+
+    // load space
     const space = await Space.findById(spaceId)
       .populate("resources")
       .populate("pricingPlans");
-
     if (!space || !space.isPublished) {
       return { success: false, error: "Space not found" };
     }
 
-    /* ===== PRICE CALC ===== */
-
-    const basePrice =
-      space.pricingPlans.find((p) => p._id.toString() === plan?.planId)?.price || 0;
-
-    let resourceTotal = 0;
-
-    if (Array.isArray(bookingData.resources)) {
-      bookingData.resources.forEach((r) => {
-        const res = space.resources.find((sr) => sr._id.toString() === r.resourceId);
-        if (res) resourceTotal += (res.prices?.[plan?.type] || 0) * r.qty;
-      });
+    // frontend final amount (base)
+    const originalAmount = Number(
+      bookingData.totalAmount || bookingData.total || 0,
+    );
+    
+    if (originalAmount <= 0) {
+      return {
+        success: false,
+        error: "Total amount missing or invalid from frontend",
+      };
     }
 
-    const totalAmount = basePrice + resourceTotal;
-
-    /* ===== CREATE PAYMENT ONLY ===== */
-
+    // tenant + gateway resolution
     const tenantId = tenantIdOverride || (await getTenantIdFromSpace(spaceId));
     const gatewayResolved = await resolveGateway(tenantId);
-
-    const orderId = `booking_${new mongoose.Types.ObjectId()}`;
-
-    let paymentData;
-
-    if (gatewayResolved.gateway === "cashfree") {
-      paymentData = await cashfreeService.createCashfreeOrder({
-        credentials: gatewayResolved.credentials,
-        orderId,
-        amount: totalAmount,
-        currency: "INR",
-        customer: {
-          name: customerPayload.name || "Test User",
-          email: customerPayload.email || "test@test.com",
-          phone: customerPayload.phone || "9999999999",
-        },
-      });
+    if (!gatewayResolved || !gatewayResolved.gateway) {
+      return { success: false, error: "Payment gateway not configured" };
     }
 
-    /* ===== SAVE TEMP ONLY ===== */
+    // prepare internal id
+    const internalBookingId = `booking_${new mongoose.Types.ObjectId()}`;
 
-    await TempBooking.create({
-      orderId,
+    // OFFER VALIDATION (server-side final)
+    let couponCode = rawCouponCode
+      ? String(rawCouponCode).toUpperCase().trim()
+      : null;
+    let discountAmount = 0;
+    let finalAmount = originalAmount;
+    let appliedOffer = null;
+
+    if (couponCode) {
+      try {
+        const offerResult = await validateOfferPreview({
+          spaceId,
+          code: couponCode,
+          userId: bookingData.user?.userId || bookingData.userId || null,
+          planType: plan?.type || plan?.pricingType || null,
+          bookingAmount: originalAmount,
+        });
+
+        console.log("Offer result", offerResult);
+
+        // validateOfferPreview returns discountAmount and finalAmount
+        discountAmount = Number(offerResult.discountAmount || 0);
+        finalAmount = Number(offerResult.finalAmount || originalAmount);
+        appliedOffer = offerResult.offer || null;
+      } catch (err) {
+        // Offer invalid — surface an error so frontend can show message
+        return { success: false, error: `Offer invalid: ${err.message}` };
+      }
+    }
+
+    // finalAmount must be > 0 (you can allow 0 if you support free bookings)
+    if (finalAmount < 0) finalAmount = 0;
+
+    // create gateway order (use finalAmount)
+    const gatewayName = gatewayResolved.gateway;
+    let gatewayOrderId = null;
+    let normalizedPaymentData = null;
+
+    if (gatewayName === "cashfree") {
+      const cfResp = await cashfreeService.createCashfreeOrder({
+        credentials: gatewayResolved.credentials,
+        orderId: internalBookingId, // pass internal id if you want mapping
+        amount: finalAmount,
+        currency: "INR",
+
+        customer: {
+          name: dbUser.username,
+          email: dbUser.email,
+          phone: dbUser.phoneNumber,
+        },
+      });
+
+      // normalize response (adapt if your cashfreeService shape differs)
+      gatewayOrderId =
+        cfResp?.orderId ||
+        cfResp?.paymentSessionId ||
+        cfResp?.data?.orderId ||
+        internalBookingId;
+
+      normalizedPaymentData = {
+        orderId: gatewayOrderId,
+        payment_session_id:
+          cfResp?.paymentSessionId ||
+          cfResp?.data?.paymentSessionId ||
+          gatewayOrderId,
+        raw: cfResp,
+      };
+    } else if (gatewayName === "razorpay") {
+      const instance = razorpayService.createRazorpayInstance(
+        gatewayResolved.credentials,
+      );
+
+      // NOTE: razorpay usually expects amount in paise (depends on helper). Keep same semantics as your existing razorpayService
+      const razorpayOrder = await razorpayService.createRazorpayOrder({
+        instance,
+        amount: finalAmount,
+        currency: "INR",
+        receipt: internalBookingId,
+      });
+
+      if (!razorpayOrder || !razorpayOrder.id) {
+        return { success: false, error: "Failed to create Razorpay order" };
+      }
+
+      gatewayOrderId = razorpayOrder.id;
+      normalizedPaymentData = {
+        orderId: gatewayOrderId,
+        payment_session_id: gatewayOrderId,
+        key: gatewayResolved.credentials.keyId,
+        raw: razorpayOrder,
+      };
+    } else {
+      return { success: false, error: "Unsupported gateway" };
+    }
+
+    if (!gatewayOrderId || !normalizedPaymentData) {
+      return { success: false, error: "Failed to initialize payment" };
+    }
+
+    const finalUser = {
+      userId: dbUser._id,
+      name: dbUser.username,
+      email: dbUser.email,
+      phone: dbUser.phoneNumber,
+    };
+
+    bookingData.user = finalUser;
+
+    const tempPayload = {
+      orderId: gatewayOrderId,
+      internalBookingId,
       bookingData,
-      totalAmount,
-    });
+      originalAmount,
+      totalAmount: finalAmount,
+      discountAmount,
+      couponCode: couponCode || null,
+      offerId: appliedOffer ? appliedOffer.id : null,
+      gateway: gatewayName,
+      createdAt: new Date(),
+    };
 
-    console.log("👉 SESSION:", paymentData.payment_session_id);
+    await TempBooking.create(tempPayload);
+
+    console.log("👉 SESSION:", normalizedPaymentData.payment_session_id);
 
     return {
       success: true,
       data: {
-        orderId,
-        payment: paymentData,
+        orderId: gatewayOrderId,
+        payment: normalizedPaymentData,
+        gateway: gatewayName,
+        internalBookingId,
+        originalAmount,
+        finalAmount,
+        discountAmount,
+        couponCode: couponCode || null,
+        offer: appliedOffer || null,
       },
     };
   } catch (error) {
-    console.error("createBooking error:", error.message);
-    return { success: false, error: error.message };
+    console.error("createBooking error:", error);
+    return { success: false, error: error.message || String(error) };
   }
 };
 

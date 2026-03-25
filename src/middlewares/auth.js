@@ -72,6 +72,7 @@ export const requireAdminApproved = async (req, res, next) => {
   }
 };
 
+// Load admin Profile
 export const loadAdminProfile = async (req, res, next) => {
   try {
     const profile = await AdminProfile.findOne({ owner: req.user._id });
@@ -94,7 +95,31 @@ export const loadAdminProfile = async (req, res, next) => {
   }
 };
 
-// middlewares/auth.js mein requireAdminAccess ke andar
+
+export const loadUserProfile = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const profile = await User.findById(req.user._id).select(
+      "_id email username phoneNumber role phoneVerified emailVerified kyc isActive createdAt updatedAt"
+    );
+
+    if (!profile) {
+      return res.status(404).json({ message: "User profile not found" });
+    }
+
+    // attach to req
+    req.userProfile = profile;
+
+    next();
+  } catch (err) {
+    console.error("loadUserProfile error:", err);
+    return res.status(500).json({ message: "Error loading user profile" });
+  }
+};
+
 
 export const requireAdminAccess = async (req, res, next) => {
   try {
@@ -123,7 +148,6 @@ export const requireAdminAccess = async (req, res, next) => {
   }
 };
 
-// Permission check using customRoles
 export const requirePermission =
   (resource, action) => async (req, res, next) => {
     try {

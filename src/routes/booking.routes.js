@@ -1,3 +1,4 @@
+console.log("✅ BOOKING ROUTES REGISTERED");
 // routes/booking.routes.js (demo GET for listings integration)
 import express from "express";
 import {
@@ -11,14 +12,32 @@ import {
   checkIn,
   checkOut,
   updatePaymentStatus,
+  verifyRazorpayPayment,
 } from "../controllers/user_controllers/booking.controller.js";
-import { cashfreeWebhook } from "../controllers/user_controllers/cashfreeWebhook.controller.js";
+
+import { saveGatewayCredentials } from "../controllers/admin_controllers/payment.controller.js";
+
+import { validateGatewayPayload } from "../middlewares/paymentGateway.validator.js";
+
+import { requireAdminAccess, requireAuth } from "../middlewares/auth.js";
+import Booking from "../models/user_models/Booking.js";
 
 const router = express.Router();
 
 router.post("/booking", createBooking);
 
-router.get("/:id", getBooking);
+router.post(
+  "/credentials",
+  // requireAuth,
+  // requireAdminAccess,
+  validateGatewayPayload,
+  saveGatewayCredentials,
+);
+
+// /api/payout/
+router.post("/razorpay/verify", verifyRazorpayPayment);
+
+router.get("/bookings/:id", getBooking);
 
 router.get("/user/:userId", getUserBookings);
 
@@ -36,18 +55,25 @@ router.post("/:id/check-out", checkOut);
 
 router.put("/:id/payment", updatePaymentStatus);
 
-// Demo GET: /bookings/space/:spaceId/available?start=2026-03-06&end=2026-03-07
-router.get("/space/:spaceId/available", async (req, res) => {
+//  /bookings/space/:spaceId/available?start=2026-03-06&end=2026-03-07
+router.get("/space/:spaceId/bookings", async (req, res) => {
   try {
     const { spaceId } = req.params;
-    const { start, end } = req.query;
-    const hasOverlap = await Booking.checkOverlap(
-      spaceId,
-      new Date(start),
-      new Date(end),
-    );
-    res.json({ available: !hasOverlap, spaceId });
+
+    const bookings = await Booking.find({
+      space: spaceId,
+      status: { $in: ["confirmed", "completed"] },
+      "payment.status": "paid",
+    })
+      .select("bookingDuration status quantity")
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      bookings,
+    });
   } catch (error) {
+    console.error("❌ Fetch bookings error:", error);
     res.status(500).json({ error: error.message });
   }
 });

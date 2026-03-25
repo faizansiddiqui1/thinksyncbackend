@@ -50,24 +50,26 @@ export async function getAdminKycStatusHandler(req, res) {
     const cv = await CompanyVerification.findOne({ userId: user._id });
     const adminProfile = await AdminProfile.findOne({ owner: user._id });
 
+    const rawConfig = await getGlobalKycConfig();
+    const config = normalizeConfig(rawConfig);
+
     if (!adminProfile) {
       return res.json({
         success: true,
         role: user.role,
         customRoles: user.customRoles || [],
+        config,
+        details: cv || {},
         status: "not_submitted",
       });
     }
-
-    const rawConfig = await getGlobalKycConfig();
-    const config = normalizeConfig(rawConfig);
 
     const decision = getAdminKycDecision(cv, config, user);
 
     return res.json({
       success: true,
       role: user.role,
-      customRoles: user.customRoles || [], // 🔥 THIS LINE FIXES EVERYTHING
+      customRoles: user.customRoles || [],
       status: decision,
       config,
       reviewedAt: adminProfile.kyc.reviewedAt,
@@ -190,8 +192,15 @@ export async function verifyPanHandler(req, res, next) {
     v.pan.data = raw;
 
     await v.save();
-
     await updateAdminKyc(userId);
+
+    // ✅ FIX HERE
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter correct Individual PAN number",
+      });
+    }
 
     return res.json({
       success: true,
@@ -282,8 +291,15 @@ export async function verifyGstHandler(req, res, next) {
     v.gst.data = raw;
 
     await v.save();
-
     await updateAdminKyc(userId);
+
+    // ✅ FIX — wrong GST pe error bhejo
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: raw?.message || "Invalid GST number",
+      });
+    }
 
     return res.json({
       success: true,
@@ -321,8 +337,15 @@ export async function verifyCinHandler(req, res, next) {
     v.cin.data = raw;
 
     await v.save();
-
     await updateAdminKyc(userId);
+
+    // ✅ MAIN FIX
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: raw?.message || "Invalid CIN number",
+      });
+    }
 
     return res.json({
       success: true,
@@ -347,19 +370,6 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
     }
 
     const v = await getOrCreate(userId);
-
-    // ✅ CHECK IF ALREADY VERIFIED
-    if (
-      v.aadhaar?.status === "verified" &&
-      v.aadhaar?.data?.document_fields?.uid
-    ) {
-      return res.json({
-        success: true,
-        message: "Your Aadhaar already verified",
-        verified: true,
-        data: v.aadhaar.data,
-      });
-    }
 
     let raw, verified;
 

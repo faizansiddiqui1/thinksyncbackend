@@ -104,7 +104,9 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
     if (!user) {
       throw new Error("Account not found. Please signup.");
     }
-    return issueOtp(user, isMail ? email : phone, isMail);
+    await issueOtp(user, isMail ? email : phone, isMail);
+
+    return { role: user.role }; 
   }
 
   if (normalizedIntent === "signup") {

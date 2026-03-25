@@ -21,9 +21,10 @@ import resourceRoutes from "./routes/resource.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import CompanyVerificationRoutes from "./routes/companyverification.routes.js";
 import BookingRoutes from "./routes/booking.routes.js";
-import TempBooking from "./models/user_models/TempBooking.js";
-import Booking from "./models/user_models/Booking.js";
+
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
+
+
 
 dotenv.config();
 const app = express();
@@ -97,16 +98,17 @@ app.get("/health", (req, res) =>
   }),
 );
 
+
+
+
+app.use("/api/payout", BookingRoutes);
+
+
+
 /* =========================
    ROUTES - mount with explicit prefixes (avoid param conflicts)
    ========================= */
 app.use("/api", propertyRoutes); // existing file uses /spaces and /space/:slug paths
-
-app.use("/api", BookingRoutes);
-
-/* Auth / users */
-app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
 
 /* Media, pricing, offers, resources */
 app.use("/api", spaceMediaRoutes);
@@ -114,8 +116,14 @@ app.use("/api", pricingPlanRoutes);
 app.use("/api", offersPlanRoutes);
 app.use("/api", resourceRoutes);
 
+
+/* Auth / users */
+app.use("/api", authRoutes);
+app.use("/api/users", userRoutes);
+
 /* Admin area */
-app.use("/api/admin", adminRoutes);
+app.use("/api", adminRoutes);
+
 app.use("/api/admin/smtp", smtpRoutes);
 app.use("/api", CompanyVerificationRoutes);
 

@@ -8,12 +8,12 @@ import FormDataPkg from "form-data";
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
 
-const env = process.env.CASHFREE_ENV;
+const env = (process.env.CASHFREE_ENV || "").toLowerCase().trim();
 
 let PAYOUT_BASE = "https://api.cashfree.com";
 let VERIF_BASE = "https://api.cashfree.com/verification";
 
-if (env === "sandbox") {
+if (env === "sandbox" || env === "test") {
   PAYOUT_BASE = "https://sandbox.cashfree.com";
   VERIF_BASE = "https://sandbox.cashfree.com/verification";
 }
@@ -43,14 +43,39 @@ function baseHeaders() {
   return h;
 }
 
+console.log("ENV:", process.env.CASHFREE_ENV);
+console.log("VERIF_BASE:", VERIF_BASE);
+console.log("SECRET:", process.env.CASHFREE_CLIENT_SECRET?.slice(0, 12));
+
 export async function cfPost(path, body) {
   const url = `${VERIF_BASE}${path}`;
+
   const headers = {
     ...baseHeaders(),
     "Content-Type": "application/json",
   };
-  const res = await axios.post(url, body, { headers, timeout: 20000 });
-  return res.data;
+
+  try {
+    const res = await axios.post(url, body, {
+      headers,
+      timeout: 20000,
+    });
+
+    return res.data;
+  } catch (err) {
+    console.log("CF GST ERROR FULL:", err?.response?.data || err.message);
+
+    // ✅ PASS EXACT ERROR UP
+    const e = new Error(
+      err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Cashfree request failed",
+    );
+
+    e.response = err.response; // ✅ VERY IMPORTANT
+    throw e;
+  }
 }
 
 export async function cfMultipartPost(path, formOrObject) {

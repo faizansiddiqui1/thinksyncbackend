@@ -9,7 +9,7 @@ const amenitySchema = new Schema(
     available: { type: Boolean, default: true },
     description: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const imageSchema = new Schema(
@@ -22,17 +22,31 @@ const imageSchema = new Schema(
     size: Number,
   },
   { _id: true },
-); 
+);
 
 const resourceSchema = new Schema(
   {
-    space: { type: Schema.Types.ObjectId, ref: "Space", required: true, index: true }, // link to Space
+    space: {
+      type: Schema.Types.ObjectId,
+      ref: "Space",
+      required: true,
+      index: true,
+    }, // link to Space
     name: { type: String, required: true, trim: true },
 
     foodPrice: { type: Number, trim: true },
     type: {
       type: String,
-      enum: ["meeting_room", "private_cabin", "conference_room", "food"],
+      enum: [
+        "meeting_room",
+        "private_cabin",
+        "conference_room",
+        "food",
+        "lounge",
+        "open_space",
+        "informal_area",
+        "desk",
+      ],
       required: true,
     },
     images: [imageSchema],
@@ -40,9 +54,24 @@ const resourceSchema = new Schema(
     prices: {
       hourly: { type: Number, min: 0, default: null },
       daily: { type: Number, min: 0, default: null },
+      weekly: { type: Number, min: 0, default: null },
       monthly: { type: Number, min: 0, default: null },
     },
 
+    inventory: {
+      total: { type: Number, default: 0 },
+      available: { type: Number, default: 0 }, // available now
+      booked: { type: Number, default: 0 }, // already booked
+    },
+
+    bookingRules: {
+      supportsHourly: { type: Boolean, default: true },
+      supportsDaily: { type: Boolean, default: true },
+      supportsWeekly: { type: Boolean, default: true },
+      supportsMonthly: { type: Boolean, default: true },
+      bufferMinutes: { type: Number, default: 0 },
+    },
+    
     currency: { type: String, default: "INR" },
 
     isActive: { type: Boolean, default: true },
@@ -69,7 +98,7 @@ const resourceSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // helpful index for queries by space + active

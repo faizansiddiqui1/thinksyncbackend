@@ -100,8 +100,7 @@ export async function verifyPan(pan, name) {
 
     // // ✔ Accept both Company + Business (future safe)
     // const isIndividual =
-    //   type === "Individual"
-   
+    // type === "Individual"
 
     // if (!isIndividual) {
     //   throw new ApiError(400, "Please enter Valid Individual PAN number");
@@ -122,7 +121,7 @@ export async function verifyCompanyPan(pan, name) {
 
     const type = (res?.type || "").toLowerCase();
 
-    // ✔ Accept both Company + Business (future safe)
+    // ✅ STRICT COMPANY CHECK
     const isCompany =
       type === "company" ||
       type === "business" ||
@@ -130,23 +129,33 @@ export async function verifyCompanyPan(pan, name) {
       type === "llp";
 
     if (!isCompany) {
-      throw new ApiError(400, "Please enter Valid Company PAN number");
+      throw new ApiError(
+        400,
+        `This is ${res?.type} PAN. Please enter Company PAN`,
+      );
     }
 
-    return { raw: res, verified: res?.valid === true };
+    return { raw: res, verified: true };
   } catch (err) {
     const msg = err?.response?.data?.message || err?.message || String(err);
-    throw new ApiError(err?.response?.status || 500, msg);
+    throw new ApiError(err?.statusCode || 500, msg);
   }
 }
+
 // GSTIN verify
 export async function verifyGstin(gstin) {
   try {
-    const res = await cfPost("/gstin", { gstin });
-    return { raw: res, verified: isVerified(res) };
+    const res = await cfPost("/gstin", { GSTIN: gstin }); // ✅ FIX
+
+    return {
+      raw: res,
+      verified: res?.valid === true,
+    };
   } catch (err) {
-    const msg = err?.response?.data?.message || err?.message || String(err);
-    throw new ApiError(err?.response?.status || 500, msg);
+    const msg =
+      err?.response?.data?.message || err?.message || "GST verification failed";
+
+    throw new ApiError(400, msg);
   }
 }
 
@@ -155,12 +164,25 @@ export async function verifyCin(cin) {
   try {
     const res = await cfPost("/cin", {
       verification_id: `cin_${Date.now()}`,
-      cin,
+      cin: cin,
     });
-    return { raw: res, verified: isVerified(res) };
+
+    console.log("RAW CIN RESPONSE:", res);
+
+    return {
+      raw: res,
+
+      // ✅ FINAL FIX
+      verified: res?.status === "VALID",
+    };
   } catch (err) {
-    const msg = err?.response?.data?.message || err?.message || String(err);
-    throw new ApiError(err?.response?.status || 500, msg);
+    const msg =
+      err?.response?.data?.message ||
+      err?.response?.data?.error ||
+      err?.message ||
+      "CIN verification failed";
+
+    throw new ApiError(400, msg);
   }
 }
 

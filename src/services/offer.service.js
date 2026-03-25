@@ -2,9 +2,11 @@ import mongoose from "mongoose";
 import Offer from "../models/admin_models/Offer.js";
 import Space from "../models/admin_models/Space.js";
 import CouponRedemption from "../models/admin_models/CouponRedemption.js";
+import Booking from "../models/user_models/Booking.js";
 
 const ensureSpace = async (spaceId) => {
-  if (!mongoose.Types.ObjectId.isValid(spaceId)) throw new Error("Invalid space id");
+  if (!mongoose.Types.ObjectId.isValid(spaceId))
+    throw new Error("Invalid space id");
   const s = await Space.findById(spaceId).select("_id").lean();
   if (!s) throw new Error("Space not found");
   return s;
@@ -15,12 +17,20 @@ export const createOffer = async (spaceId, data, userId = null) => {
 
   if (!data.code) throw new Error("Offer code is required");
   if (!data.discountType) throw new Error("discountType is required");
-  if (data.discountType === "percentage" && (data.discountValue <= 0 || data.discountValue > 100))
+  if (
+    data.discountType === "percentage" &&
+    (data.discountValue <= 0 || data.discountValue > 100)
+  )
     throw new Error("percentage discountValue must be between 0 and 100");
-  if (new Date(data.validFrom) >= new Date(data.validTill)) throw new Error("validFrom must be before validTill");
+  if (new Date(data.validFrom) >= new Date(data.validTill))
+    throw new Error("validFrom must be before validTill");
 
   // unique code per space or global? model has unique globally; ensure uniqueness for this space (better UX)
-  const existing = await Offer.findOne({ code: data.code, space: spaceId, isActive: true }).lean();
+  const existing = await Offer.findOne({
+    code: data.code,
+    space: spaceId,
+    isActive: true,
+  }).lean();
   if (existing) throw new Error("Offer code already exists for this space");
 
   const offer = await Offer.create({
@@ -70,18 +80,30 @@ export const listAllOffers = async () => {
 export const updateOffer = async (spaceId, offerId, data, userId = null) => {
   await ensureSpace(spaceId);
 
-  if (!mongoose.Types.ObjectId.isValid(offerId)) throw new Error("Invalid offer id");
+  if (!mongoose.Types.ObjectId.isValid(offerId))
+    throw new Error("Invalid offer id");
 
   const offer = await Offer.findOne({ _id: offerId, space: spaceId });
   if (!offer) return null;
 
   if (data.code && data.code !== offer.code) {
-    const exists = await Offer.findOne({ code: data.code.toUpperCase().trim(), space: spaceId, isActive: true });
-    if (exists) throw new Error("Another active offer with this code exists for this space");
+    const exists = await Offer.findOne({
+      code: data.code.toUpperCase().trim(),
+      space: spaceId,
+      isActive: true,
+    });
+    if (exists)
+      throw new Error(
+        "Another active offer with this code exists for this space",
+      );
     offer.code = data.code.toUpperCase().trim();
   }
 
-  if (data.validFrom && data.validTill && new Date(data.validFrom) >= new Date(data.validTill))
+  if (
+    data.validFrom &&
+    data.validTill &&
+    new Date(data.validFrom) >= new Date(data.validTill)
+  )
     throw new Error("validFrom must be before validTill");
 
   const allowed = [
@@ -111,7 +133,8 @@ export const updateOffer = async (spaceId, offerId, data, userId = null) => {
 
 export const deleteOffer = async (spaceId, offerId, userId = null) => {
   await ensureSpace(spaceId);
-  if (!mongoose.Types.ObjectId.isValid(offerId)) throw new Error("Invalid offer id");
+  if (!mongoose.Types.ObjectId.isValid(offerId))
+    throw new Error("Invalid offer id");
 
   const offer = await Offer.findOne({ _id: offerId, space: spaceId });
   if (!offer) return null;
@@ -122,92 +145,78 @@ export const deleteOffer = async (spaceId, offerId, userId = null) => {
   return true;
 };
 
-export const validateAndApplyOffer = async ({ spaceId, code, userId, planType, bookingAmount }) => {
-  await ensureSpace(spaceId);
-
+/**
+ * Read-only validation + discount calculation for UI preview.
+ * DOES NOT modify DB.
+ */
+export const validateOfferPreview = async ({
+  spaceId,
+  code,
+  userId,
+  planType,
+  bookingAmount,
+}) => {
   if (!code) throw new Error("Offer code is required");
-  
-  if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-  throw new Error("Valid userId is required to apply an offer");
-}
-
-  if (bookingAmount == null || isNaN(Number(bookingAmount))) throw new Error("bookingAmount is required");
+  if (bookingAmount == null || isNaN(Number(bookingAmount)))
+    throw new Error("bookingAmount is required");
 
   const now = new Date();
+  const codeUp = code.toUpperCase().trim();
 
+  // find offer that either belongs to space or is global (space null/undefined)
   const offer = await Offer.findOne({
-    space: spaceId,
-    code: code.toUpperCase().trim(),
+    code: codeUp,
     isActive: true,
+    $or: [{ space: spaceId }, { space: { $exists: false } }, { space: null }],
   });
 
   if (!offer) throw new Error("Offer not found");
 
-  if (new Date(offer.validFrom) > now || new Date(offer.validTill) < now) throw new Error("Offer is not valid at this time");
+  if (new Date(offer.validFrom) > now || new Date(offer.validTill) < now)
+    throw new Error("Offer is not valid at this time");
 
-  if (bookingAmount < (offer.minBookingAmount || 0)) throw new Error(`Minimum booking amount for this offer is ${offer.minBookingAmount}`);
+  if (bookingAmount < (offer.minBookingAmount || 0))
+    throw new Error(
+      `Minimum booking amount for this offer is ${offer.minBookingAmount}`,
+    );
 
   if (offer.applicablePlanTypes && offer.applicablePlanTypes.length) {
     if (!planType) throw new Error("planType is required for this offer");
-    if (!offer.applicablePlanTypes.includes(planType)) throw new Error("Offer not applicable for this plan type");
+    if (!offer.applicablePlanTypes.includes(planType))
+      throw new Error("Offer not applicable for this plan type");
   }
 
-  if (offer.totalUsageLimit != null && offer.usedCount >= offer.totalUsageLimit) throw new Error("Offer usage limit reached");
+  if (offer.totalUsageLimit != null && offer.usedCount >= offer.totalUsageLimit)
+    throw new Error("Offer usage limit reached");
 
-  if (offer.firstTimeUserOnly) {
-    if (!userId) throw new Error("User must be logged in to use this offer");
-    const prior = await CouponRedemption.countDocuments({ user: userId }).exec();
-    if (prior > 0) throw new Error("Offer valid for first-time users only");
+  // first time user check: read-only preview uses Booking collection
+  if (offer.firstTimeUserOnly && userId) {
+    const priorBookings = await Booking.countDocuments({ userId }).exec();
+    if (priorBookings > 0)
+      throw new Error("Offer valid for first-time users only");
   }
 
-  if (offer.perUserUsageLimit != null) {
-    if (!userId) throw new Error("User must be logged in to use this offer");
-    const usedByUser = await CouponRedemption.countDocuments({ offer: offer._id, user: userId }).exec();
-    if (usedByUser >= offer.perUserUsageLimit) throw new Error("You have exceeded the usage limit for this offer");
+  // per-user usage check (read-only)
+  if (offer.perUserUsageLimit != null && userId) {
+    const usedByUser = await CouponRedemption.countDocuments({
+      offer: offer._id,
+      user: userId,
+    }).exec();
+    if (usedByUser >= offer.perUserUsageLimit)
+      throw new Error("You have exceeded the usage limit for this offer");
   }
 
-  // compute discount
+  // calculate discount
   let discount = 0;
   if (offer.discountType === "percentage") {
     discount = (Number(bookingAmount) * Number(offer.discountValue)) / 100;
+    if (offer.maxDiscountAmount != null)
+      discount = Math.min(discount, Number(offer.maxDiscountAmount));
   } else {
     discount = Number(offer.discountValue);
   }
-  if (offer.maxDiscountAmount != null) {
-    discount = Math.min(discount, Number(offer.maxDiscountAmount));
-  }
   discount = Math.round((discount + Number.EPSILON) * 100) / 100;
-
   const finalAmount = Math.max(0, Number(bookingAmount) - discount);
-
-  // create redemption and increment usedCount atomically-ish
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const redemption = await CouponRedemption.create(
-      [
-        {
-          offer: offer._id,
-          user: userId,
-          space: spaceId,
-          amountAtBooking: Number(bookingAmount),
-          discountGiven: discount,
-          createdBy: userId,
-        },
-      ],
-      { session }
-    );
-
-    offer.usedCount = (offer.usedCount || 0) + 1;
-    await offer.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    throw new Error("Failed to apply offer");
-  }
 
   return {
     offer: {
@@ -216,10 +225,121 @@ export const validateAndApplyOffer = async ({ spaceId, code, userId, planType, b
       title: offer.title,
       discountType: offer.discountType,
       discountValue: offer.discountValue,
+      maxDiscountAmount: offer.maxDiscountAmount,
       stackable: offer.stackable,
     },
     discountAmount: discount,
     finalAmount,
     stackable: !!offer.stackable,
   };
+};
+
+/**
+ * Redeem the offer — writes DB (create redemption + increment usedCount)
+ * Call THIS only after payment confirmed (payment verify webhook or verify endpoint).
+ * Uses transaction to avoid races.
+ */
+export const redeemOffer = async ({
+  offerCode,
+  userId,
+  spaceId,
+  bookingAmount,
+  bookingRef /* e.g. internalBookingId or bookingId */,
+}) => {
+  if (!offerCode) throw new Error("offerCode required");
+  if (!userId) throw new Error("userId required");
+  if (bookingAmount == null || isNaN(Number(bookingAmount)))
+    throw new Error("bookingAmount required");
+
+  const codeUp = offerCode.toUpperCase().trim();
+
+  // load offer with a "for update" pattern in transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    // Find the offer document inside the session
+    const offer = await Offer.findOne({
+      code: codeUp,
+      isActive: true,
+      $or: [{ space: spaceId }, { space: { $exists: false } }, { space: null }],
+    }).session(session);
+
+    if (!offer) throw new Error("Offer not found");
+
+    const now = new Date();
+    if (new Date(offer.validFrom) > now || new Date(offer.validTill) < now)
+      throw new Error("Offer expired");
+
+    if (bookingAmount < (offer.minBookingAmount || 0))
+      throw new Error("Booking amount below minimum for offer");
+
+    if (
+      offer.totalUsageLimit != null &&
+      offer.usedCount >= offer.totalUsageLimit
+    )
+      throw new Error("Offer usage limit reached");
+
+    // firstTimeUserOnly check against Booking collection (best)
+    if (offer.firstTimeUserOnly) {
+      const priorBookings = await Booking.countDocuments({ userId }).session(session);
+
+      if (priorBookings > 0)
+        throw new Error("Offer valid for first-time users only");
+    }
+
+    if (offer.perUserUsageLimit != null) {
+      const usedByUser = await CouponRedemption.countDocuments({
+        offer: offer._id,
+        user: userId,
+      }).session(session);
+      if (usedByUser >= offer.perUserUsageLimit)
+        throw new Error("You have exceeded the usage limit for this offer");
+    }
+
+    // compute discount
+    let discount = 0;
+    if (offer.discountType === "percentage") {
+      discount = (Number(bookingAmount) * Number(offer.discountValue)) / 100;
+      if (offer.maxDiscountAmount != null)
+        discount = Math.min(discount, Number(offer.maxDiscountAmount));
+    } else {
+      discount = Number(offer.discountValue);
+    }
+    discount = Math.round((discount + Number.EPSILON) * 100) / 100;
+    const finalAmount = Math.max(0, Number(bookingAmount) - discount);
+
+    // Create redemption record
+    const redemption = await CouponRedemption.create(
+      [
+        {
+          offer: offer._id,
+          user: userId,
+          space: spaceId,
+          amountAtBooking: Number(bookingAmount),
+          discountGiven: discount,
+          bookingRef: bookingRef || null,
+          createdBy: userId,
+        },
+      ],
+      { session },
+    );
+
+    // increment usedCount atomically
+    offer.usedCount = (offer.usedCount || 0) + 1;
+    await offer.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return {
+      redemption: redemption[0],
+      discount,
+      finalAmount,
+      offerId: offer._id,
+    };
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
 };

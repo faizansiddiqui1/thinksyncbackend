@@ -6,6 +6,7 @@ import {
   deleteOffer,
   validateOffer,
   listAllOffers,
+  redeemOfferController,
 } from "../controllers/admin_controllers/offer.controller.js";
 import { requireAdminApproved, requireAuth } from "../middlewares/auth.js";
 
@@ -20,7 +21,12 @@ router.get("/offers", listAllOffers);
 router.put("/spaces/:spaceId/offers/:offerId", requireAuth, updateOffer);
 router.delete("/spaces/:spaceId/offers/:offerId", requireAuth, requireAdminApproved, deleteOffer);
 
-// validate / apply (returns computed discount but does not force booking)
-router.post("/spaces/:spaceId/offers/validate", validateOffer);
 
+// preview (no auth optional)
+router.post("/offers/validate", validateOffer);
+
+// redeem - must be protected and called only after successful payment
+router.post("/offers/redeem", requireAuth, redeemOfferController);
+
+ 
 export default router;

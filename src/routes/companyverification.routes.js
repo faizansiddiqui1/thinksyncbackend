@@ -42,7 +42,7 @@ router.post(
   verifyAadhaarOCRHandler,
 );
 
-// SAve documets iamges in DB
+// Save documets iamges in DB
 router.post("/kyc/presign", requireAuth, getPresignForKycImage);
 router.post("/kyc/save", requireAuth, saveKycImage);
 

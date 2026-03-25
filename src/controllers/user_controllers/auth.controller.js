@@ -16,17 +16,22 @@ export const sendOtpHandler = async (req, res) => {
     const { identifier, username, intent } = req.body;
 
     if (!identifier) {
-      return res
-        .status(400)
-        .json({ message: "Email or phone required" });
+      return res.status(400).json({ message: "Email or phone required" });
     }
 
-    await sendOtp({ identifier, username, intent });
-    return res.status(200).json({ message: "OTP sent" });
+    // 👇 important change
+    const result = await sendOtp({ identifier, username, intent });
+
+    return res.status(200).json({
+      message: "OTP sent",
+      role: result.role,   // 👈 ADD THIS
+    });
   } catch (error) {
     return res.status(400).json({ message: error.message });
   }
 };
+
+
 
 export const signup = async (req, res) => {
   try {
@@ -44,6 +49,8 @@ export const signup = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 }; 
+
+
 
 export const login = async (req, res) => {
   try {

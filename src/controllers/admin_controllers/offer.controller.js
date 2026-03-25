@@ -1,4 +1,5 @@
 import * as service from "../../services/offer.service.js";
+import { validateOfferPreview, redeemOffer } from "../../services/offer.service.js";
 
 export const createOffer = async (req, res) => {
   try {
@@ -22,7 +23,6 @@ export const listOffers = async (req, res) => {
     return res.status(400).json({ message: err.message });
   }
 };
-
 
 export const listAllOffers = async (req, res) => {
   try {
@@ -63,17 +63,16 @@ export const deleteOffer = async (req, res) => {
   }
 };
 
-/**
- * Validate/Apply an offer code for a booking request body:
- * { code, userId, planType, bookingAmount }
- * returns computed discount and finalAmount plus offer info
- */
+
+
+// POST /api/offers/validate  (preview)
 export const validateOffer = async (req, res) => {
   try {
-    const spaceId = req.params.spaceId;
-    const { code, userId, planType, bookingAmount } = req.body;
+    const { code, planType, bookingAmount } = req.body;
+    const spaceId = req.params.spaceId || req.body.spaceId;
+    const userId = req.user?.id || req.body.userId; // prefer authenticated user
 
-    const result = await service.validateAndApplyOffer({
+    const result = await validateOfferPreview({
       spaceId,
       code,
       userId,
@@ -81,8 +80,30 @@ export const validateOffer = async (req, res) => {
       bookingAmount,
     });
 
-    return res.status(200).json({ message: "Offer valid", data: result });
+    return res.json({ success: true, data: result });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/offers/redeem  (called from verify-payment flow only)
+export const redeemOfferController = async (req, res) => {
+  try {
+    const { code, bookingAmount, bookingRef } = req.body;
+    const spaceId = req.params.spaceId || req.body.spaceId;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: "Auth required" });
+
+    const result = await redeemOffer({
+      offerCode: code,
+      userId,
+      spaceId,
+      bookingAmount,
+      bookingRef,
+    });
+
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return res.status(400).json({ success: false, error: err.message });
   }
 };

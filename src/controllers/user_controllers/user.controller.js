@@ -1,69 +1,102 @@
-import User from '../../models/user_models/User.js';
-import { ApiResponse, ApiError } from '../../utils/apiResponse.js';
+import User from "../../models/user_models/User.js";
+import { ApiResponse, ApiError } from "../../utils/apiResponse.js";
+import {
+  sendProfileOtp,
+  confirmProfileOtp,
+} from "../../services/profile.service.js";
 
-export const getProfile = async (req, res, next) => {
+// controllers/user.controller.js
+import {
+  updateUserProfile,
+  changeUserPassword,
+} from "../../services/user.service.js";
+
+export const getUserProfileHandler = async (req, res) => {
   try {
-    res.status(200).json(
-      new ApiResponse(200, { user: req.user }, 'Profile fetched successfully')
-    );
-  } catch (error) {
-    next(error);
+    // loadUserProfile middleware se already attach ho chuka hoga
+    if (!req.userProfile) {
+      return res.status(404).json({ message: "User profile not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: req.userProfile,
+    });
+  } catch (err) {
+    console.error("getUserProfile error:", err);
+    return res.status(500).json({ message: "Failed to fetch user profile" });
   }
 };
 
-export const updateProfile = async (req, res, next) => {
+export const sendProfileOtpHandler = async (req, res) => {
   try {
-    const { email, username, phoneNumber } = req.body;
-
-    const updateData = {};
-    if (email) updateData.email = email;
-    if (username) updateData.username = username;
-    if (phoneNumber) updateData.phoneNumber = phoneNumber;
-
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      updateData,
-      { new: true, runValidators: true }
-    ).select('-password -refreshTokens');
-
-    res.status(200).json(
-      new ApiResponse(200, { user }, 'Profile updated successfully')
-    );
-  } catch (error) {
-    next(error);
+    const identifier = req.body.identifier;
+    if (!identifier)
+      return res.status(400).json({ message: "Identifier required" });
+    await sendProfileOtp(req.user._id, identifier);
+    return res.json({ success: true, message: "OTP sent" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
   }
 };
 
-export const changePassword = async (req, res, next) => {
+export const confirmProfileOtpHandler = async (req, res) => {
   try {
+    const { identifier, otp } = req.body;
+    if (!identifier || !otp) return res.status(400).json({ message: "Identifier and OTP required" });
+    await confirmProfileOtp(req.user._id, identifier, otp);
+    return res.json({ success: true, message: "Verified successfully" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updateProfileHandler = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const updates = req.body || {};
+
+    const result = await updateUserProfile(userId, updates);
+
+    // If pending (identifier change) -> 202 Accepted with message
+    if (result && result.pending) {
+      return res.status(202).json({ success: true, message: result.message });
+    }
+
+    // return updated user (sanitized)
+    return res.json({
+      success: true,
+      message: result.message,
+      data: result.user,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const changePasswordHandler = async (req, res) => {
+  try {
+    const userId = req.user._id;
     const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
-      throw new ApiError(400, 'Current password and new password are required');
-    }
-
-    if (newPassword.length < 6) {
-      throw new ApiError(400, 'New password must be at least 6 characters long');
-    }
-
-    const user = await User.findById(req.user._id);
-    const isPasswordValid = await user.comparePassword(currentPassword);
-
-    if (!isPasswordValid) {
-      throw new ApiError(401, 'Current password is incorrect');
-    }
-
-    user.password = newPassword;
-    user.refreshTokens = [];
-    await user.save();
-
-    res.status(200).json(
-      new ApiResponse(200, null, 'Password changed successfully. Please login again')
+    const result = await changeUserPassword(
+      userId,
+      currentPassword,
+      newPassword,
     );
-  } catch (error) {
-    next(error);
+    return res.json({ success: true, message: result.message });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
   }
 };
+
+
+
+
+
+
+
+
+
 
 export const getAllUsers = async (req, res, next) => {
   try {
@@ -73,14 +106,14 @@ export const getAllUsers = async (req, res, next) => {
     if (role) query.role = role;
     if (search) {
       query.$or = [
-        { email: { $regex: search, $options: 'i' } },
-        { username: { $regex: search, $options: 'i' } }
+        { email: { $regex: search, $options: "i" } },
+        { username: { $regex: search, $options: "i" } },
       ];
     }
 
     const users = await User.find(query)
-      .select('-password -refreshTokens')
-      .populate('customRoles')
+      .select("-password -refreshTokens")
+      .populate("customRoles")
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
@@ -88,12 +121,16 @@ export const getAllUsers = async (req, res, next) => {
     const count = await User.countDocuments(query);
 
     res.status(200).json(
-      new ApiResponse(200, {
-        users,
-        totalPages: Math.ceil(count / limit),
-        currentPage: page,
-        totalUsers: count
-      }, 'Users fetched successfully')
+      new ApiResponse(
+        200,
+        {
+          users,
+          totalPages: Math.ceil(count / limit),
+          currentPage: page,
+          totalUsers: count,
+        },
+        "Users fetched successfully",
+      ),
     );
   } catch (error) {
     next(error);
@@ -103,16 +140,16 @@ export const getAllUsers = async (req, res, next) => {
 export const getUserById = async (req, res, next) => {
   try {
     const user = await User.findById(req.params.id)
-      .select('-password -refreshTokens')
-      .populate('customRoles');
+      .select("-password -refreshTokens")
+      .populate("customRoles");
 
     if (!user) {
-      throw new ApiError(404, 'User not found');
+      throw new ApiError(404, "User not found");
     }
 
-    res.status(200).json(
-      new ApiResponse(200, { user }, 'User fetched successfully')
-    );
+    res
+      .status(200)
+      .json(new ApiResponse(200, { user }, "User fetched successfully"));
   } catch (error) {
     next(error);
   }
@@ -123,16 +160,16 @@ export const deactivateUser = async (req, res, next) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { isActive: false },
-      { new: true }
-    ).select('-password -refreshTokens');
+      { new: true },
+    ).select("-password -refreshTokens");
 
     if (!user) {
-      throw new ApiError(404, 'User not found');
+      throw new ApiError(404, "User not found");
     }
 
-    res.status(200).json(
-      new ApiResponse(200, { user }, 'User deactivated successfully')
-    );
+    res
+      .status(200)
+      .json(new ApiResponse(200, { user }, "User deactivated successfully"));
   } catch (error) {
     next(error);
   }
@@ -143,16 +180,16 @@ export const activateUser = async (req, res, next) => {
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { isActive: true },
-      { new: true }
-    ).select('-password -refreshTokens');
+      { new: true },
+    ).select("-password -refreshTokens");
 
     if (!user) {
-      throw new ApiError(404, 'User not found');
+      throw new ApiError(404, "User not found");
     }
 
-    res.status(200).json(
-      new ApiResponse(200, { user }, 'User activated successfully')
-    );
+    res
+      .status(200)
+      .json(new ApiResponse(200, { user }, "User activated successfully"));
   } catch (error) {
     next(error);
   }

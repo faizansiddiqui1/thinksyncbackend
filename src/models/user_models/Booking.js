@@ -143,13 +143,17 @@ bookingSchema.pre("validate", async function (next) {
   try {
     if (!this.isNew) return next();
 
+    // 🔥 ADD THIS LINE
+    if (this.payment?.status === "paid") {
+      return next(); // ✅ skip recalculation
+    }
+
     if (!this.priceBreakdown) this.priceBreakdown = {};
 
     this.calculateDuration();
 
     const units = this.quantity?.units || 1;
 
-    // 🔥 correct duration logic
     let duration = 1;
     if (this.plan?.type === "hourly") {
       duration = this.bookingDuration.totalHours || 1;
@@ -159,7 +163,6 @@ bookingSchema.pre("validate", async function (next) {
 
     let baseAmount = 0;
 
-    // ✅ PLAN PRICE
     if (this.plan?.planId) {
       const plan = await PricingPlan.findById(this.plan.planId);
       if (!plan) return next(new Error("Invalid pricing plan"));
@@ -167,7 +170,6 @@ bookingSchema.pre("validate", async function (next) {
       baseAmount += (plan.price || 0) * units * duration;
     }
 
-    // ✅ RESOURCE PRICE
     if (Array.isArray(this.resources)) {
       this.resources.forEach((r) => {
         baseAmount += Number(r.unitPrice || 0) * Number(r.qty || 1);
@@ -212,24 +214,39 @@ bookingSchema.methods.calculateDuration = function () {
 // ===============================
 // 🔥 OVERLAP CHECK (FIXED FOR MULTI RESOURCE)
 // ===============================
-bookingSchema.statics.checkOverlap = async function (
-  spaceId,
+bookingSchema.statics.checkAvailability = async function (
+  resourceId,
   startDate,
   endDate,
-  resourceIds = [],
+  requestedQty = 1,
 ) {
-  const query = {
-    space: spaceId,
-    status: { $in: ["confirmed", "pending"] },
-    "bookingDuration.startDate": { $lte: endDate },
-    "bookingDuration.endDate": { $gte: startDate },
+  const bookings = await this.find({
+    status: "confirmed",
+    "resources.resourceId": resourceId,
+    "bookingDuration.startDate": { $lt: endDate },
+    "bookingDuration.endDate": { $gt: startDate },
+  });
+
+  const totalBooked = bookings.reduce((sum, b) => {
+    const resource = b.resources.find(
+      (r) => r.resourceId.toString() === resourceId.toString(),
+    );
+    return sum + (resource?.qty || 0);
+  }, 0);
+
+  const Resource = mongoose.model("Resource");
+  const resourceDoc = await Resource.findById(resourceId);
+
+  const capacity = resourceDoc?.inventory?.total || 1;
+
+  const availableUnits = capacity - totalBooked;
+
+  return {
+    available: availableUnits >= requestedQty,
+    availableUnits,
+    totalBooked,
+    capacity,
   };
-
-  if (resourceIds.length > 0) {
-    query["resources.resourceId"] = { $in: resourceIds };
-  }
-
-  return (await this.find(query)).length > 0;
 };
 
 bookingSchema.index({ space: 1, "bookingDuration.startDate": 1 });
