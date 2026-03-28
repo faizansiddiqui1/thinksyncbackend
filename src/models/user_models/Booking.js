@@ -1,5 +1,5 @@
 // models/user_models/Booking.js (updated with price calc hook)
-import mongoose from "mongoose";
+import mongoose, { Schema } from "mongoose";
 import PricingPlan from "../../models/admin_models/PricingPlan.js"; // Assume exists
 
 const priceBreakdownSchema = new mongoose.Schema(
@@ -65,6 +65,15 @@ const bookingSchema = new mongoose.Schema(
       totalDays: { type: Number },
       totalHours: { type: Number },
     },
+    bookingType: {
+      type: String,
+      enum: ["hourly", "daily", "weekly", "monthly"],
+      required: true,
+      index: true,
+    },
+    startDateTime: { type: Date, required: true, index: true },
+    endDateTime: { type: Date, required: true, index: true },
+    timezone: { type: String, default: "Asia/Kolkata" },
 
     quantity: {
       seats: { type: Number, default: 1 },
@@ -78,10 +87,24 @@ const bookingSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "confirmed", "cancelled", "completed", "no_show"],
-      default: "pending",
+      enum: [
+        "pending_hold",
+        "pending",
+        "confirmed",
+        "cancelled",
+        "completed",
+        "expired",
+        "no_show",
+      ],
+      default: "pending_hold",
     },
 
+    holdExpiresAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    
     payment: {
       method: {
         type: String,

@@ -33,7 +33,6 @@ export const createBooking = async (req, res) => {
   }
 };
 
-
 export const verifyRazorpayPayment = async (req, res) => {
   try {
     const {
@@ -113,6 +112,40 @@ export const verifyRazorpayPayment = async (req, res) => {
     });
   }
 };
+
+
+export const getOwnerBookings = async (req, res) => {
+  try {
+    const ownerId = req.user._id; // auth middleware se
+    const {
+      status,
+      page = 1,
+      limit = 20,
+      upcoming,
+      past,
+      active,
+    } = req.query;
+
+    const result = await bookingService.getOwnerBookings(ownerId, {
+      status,
+      page: Number(page),
+      limit: Number(limit),
+      upcoming: upcoming === "true",
+      past: past === "true",
+      active: active === "true",
+    });
+
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+
+
 
 export const getBooking = async (req, res) => {
   try {

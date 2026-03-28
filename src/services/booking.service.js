@@ -13,7 +13,6 @@ import User from "../models/user_models/User.js";
 /* =========================
    Create Booking 
 ========================= */
-
 export const createBooking = async (bookingData, tenantIdOverride = null) => {
   try {
     const {
@@ -211,6 +210,141 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     return { success: false, error: error.message || String(error) };
   }
 };
+
+
+export const getOwnerBookings = async (ownerId, filters = {}) => {
+  try {
+    const {
+      status,
+      page = 1,
+      limit = 20,
+      upcoming = false,
+      past = false,
+      active = false,
+    } = filters;
+
+    const skip = (page - 1) * limit;
+
+    // 1) Find all spaces owned by this admin
+    const spaces = await Space.find({ owner: ownerId }).select("_id name owner");
+    const spaceIds = spaces.map((s) => s._id);
+
+    if (!spaceIds.length) {
+      return {
+        success: true,
+        data: {
+          bookings: [],
+          stats: {
+            total: 0,
+            confirmed: 0,
+            pending: 0,
+            cancelled: 0,
+            completed: 0,
+            upcoming: 0,
+            active: 0,
+            expired: 0,
+          },
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            pages: 0,
+          },
+        },
+      };
+    }
+
+    // 2) Build query
+    const now = new Date();
+    const query = { space: { $in: spaceIds } };
+
+    if (status) query.status = status;
+
+    if (upcoming) {
+      query.startDateTime = { $gt: now };
+    }
+
+    if (past) {
+      query.endDateTime = { $lt: now };
+    }
+
+    if (active) {
+      query.startDateTime = { $lte: now };
+      query.endDateTime = { $gte: now };
+      query.status = { $in: ["confirmed", "pending", "pending_hold"] };
+    }
+
+    const [bookings, total, allMatched] = await Promise.all([
+      Booking.find(query)
+        .populate("space", "name slug address owner")
+        .populate("user.userId", "username email phoneNumber")
+        .sort({ startDateTime: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Booking.countDocuments(query),
+      Booking.find(query).select("status startDateTime endDateTime holdExpiresAt"),
+    ]);
+
+    // 3) Stats for dashboard
+    const stats = {
+      total: allMatched.length,
+      confirmed: allMatched.filter((b) => b.status === "confirmed").length,
+      pending: allMatched.filter((b) => b.status === "pending").length,
+      cancelled: allMatched.filter((b) => b.status === "cancelled").length,
+      completed: allMatched.filter((b) => b.status === "completed").length,
+      expired: allMatched.filter((b) => b.status === "expired").length,
+      upcoming: allMatched.filter((b) => b.startDateTime > now).length,
+      active: allMatched.filter(
+        (b) => b.startDateTime <= now && b.endDateTime >= now,
+      ).length,
+    };
+
+    // 4) Add timer fields for frontend
+    const enrichedBookings = bookings.map((b) => {
+      const obj = b.toObject();
+      const startMs = new Date(obj.startDateTime).getTime() - now.getTime();
+      const endMs = new Date(obj.endDateTime).getTime() - now.getTime();
+      const holdMs = obj.holdExpiresAt
+        ? new Date(obj.holdExpiresAt).getTime() - now.getTime()
+        : null;
+
+      return {
+        ...obj,
+        timers: {
+          startsInMs: startMs,
+          endsInMs: endMs,
+          holdExpiresInMs: holdMs,
+          isUpcoming: startMs > 0,
+          isActive: startMs <= 0 && endMs >= 0,
+          isExpiredHold: obj.status === "pending_hold" && holdMs !== null && holdMs <= 0,
+        },
+      };
+    });
+
+    return {
+      success: true,
+      data: {
+        bookings: enrichedBookings,
+        stats,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+
+
+
+
+
+
 
 /* =========================
    Get Booking By ID

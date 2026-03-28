@@ -1,5 +1,5 @@
 import express from "express";
-import { createSmtp, deleteSmtp, getSmtp, listSmtps, toggleSmtpStatus, updateSmtp } from "../models/super_admin_models/smtpController.js";
+import { createSmtp, listSmtps, getSmtp, deleteSmtp, toggleSmtpStatus, updateSmtp } from "../models/super_admin_models/smtpController.js";
 
 const router = express.Router();
 

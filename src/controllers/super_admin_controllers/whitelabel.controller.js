@@ -1,6 +1,7 @@
-// controllers/superadmin.controller.js
-
 import AdminProfile from "../../models/admin_models/AdminProfile.js";
+
+
+
 
 export const approveWhiteLabel = async (req, res) => {
   try {

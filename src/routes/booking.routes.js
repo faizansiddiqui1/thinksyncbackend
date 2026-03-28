@@ -13,6 +13,7 @@ import {
   checkOut,
   updatePaymentStatus,
   verifyRazorpayPayment,
+  getOwnerBookings,
 } from "../controllers/user_controllers/booking.controller.js";
 
 import { saveGatewayCredentials } from "../controllers/admin_controllers/payment.controller.js";
@@ -25,6 +26,9 @@ import Booking from "../models/user_models/Booking.js";
 const router = express.Router();
 
 router.post("/booking", createBooking);
+
+router.get("/owner/bookings", requireAuth, requireAdminAccess, getOwnerBookings);
+
 
 router.post(
   "/credentials",
@@ -55,27 +59,36 @@ router.post("/:id/check-out", checkOut);
 
 router.put("/:id/payment", updatePaymentStatus);
 
+
 //  /bookings/space/:spaceId/available?start=2026-03-06&end=2026-03-07
 router.get("/space/:spaceId/bookings", async (req, res) => {
   try {
     const { spaceId } = req.params;
+    const { resourceId } = req.query;
 
-    const bookings = await Booking.find({
+    const query = {
       space: spaceId,
       status: { $in: ["confirmed", "completed"] },
       "payment.status": "paid",
-    })
-      .select("bookingDuration status quantity")
+    };
+
+    if (resourceId) {
+      query["resources.resourceId"] = resourceId;
+    }
+
+    const bookings = await Booking.find(query)
+      .select(
+        "bookingType startDateTime endDateTime bookingDuration status quantity payment resource resources",
+      )
       .sort({ createdAt: -1 });
 
-    res.json({
-      success: true,
-      bookings,
-    });
+    res.json({ success: true, bookings });
   } catch (error) {
     console.error("❌ Fetch bookings error:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
+
 
 export default router;

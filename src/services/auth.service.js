@@ -106,7 +106,7 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
     }
     await issueOtp(user, isMail ? email : phone, isMail);
 
-    return { role: user.role }; 
+    return { role: user.role };
   }
 
   if (normalizedIntent === "signup") {
@@ -131,28 +131,13 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
 
   if (normalizedIntent === "admin") {
     if (!user) {
-      if (normalizedUsername) {
-        await ensureUsernameAvailable(normalizedUsername);
-      }
-
-      const newUser = new User(
-        isMail
-          ? {
-              email,
-              ...(normalizedUsername ? { username: normalizedUsername } : {}),
-            }
-          : {
-              phoneNumber: phone,
-              ...(normalizedUsername ? { username: normalizedUsername } : {}),
-            },
-      );
-
-      return issueOtp(newUser, isMail ? email : phone, isMail);
+      throw new Error("Admin account not found");
     }
 
-    if (normalizedUsername && !user.username) {
-      await ensureUsernameAvailable(normalizedUsername);
-      user.username = normalizedUsername;
+    const allowedRoles = ["pending_admin", "admin", "super_admin"];
+
+    if (!allowedRoles.includes(user.role)) {
+      throw new Error("You are not authorized for admin login");
     }
 
     return issueOtp(user, isMail ? email : phone, isMail);
