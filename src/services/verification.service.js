@@ -91,6 +91,19 @@ export async function getFinalKycStatus(user) {
   return "approved";
 }
 
+export function getUserKycDecision(user) {
+  const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
+  const panOk = user?.kyc?.pan?.status === "verified";
+
+  if (!user?.kyc?.aadhaar) return "not_submitted";
+
+  if (!aadhaarOk) return "pending";
+
+  if (!panOk) return "pending"; // agar PAN required hai
+
+  return "approved";
+}
+
 // PAN verify
 export async function verifyPan(pan, name) {
   try {
@@ -429,8 +442,10 @@ export const saveKycImage = async (userId, body) => {
       };
     }
   }
+  
+  user.kycStatus = await getFinalKycStatus(user); // admin logic (same)
 
-  user.kycStatus = getFinalKycStatus(user);
+ 
 
   await user.save();
 

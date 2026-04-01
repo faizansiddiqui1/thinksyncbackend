@@ -31,3 +31,4 @@ router.patch(
     requireSuperAdmin,
     updateDefaultKycConfig
 )
+

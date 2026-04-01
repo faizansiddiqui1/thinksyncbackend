@@ -40,12 +40,10 @@ async function getGlobalKycConfig() {
 
 export async function getAdminKycStatusHandler(req, res) {
   try {
-    const user = await User.findById(req.user._id)
-      .populate({
-        path: "customRoles",
-        select: "name permissions",
-      })
-      .lean();
+    let user = await User.findById(req.user._id).populate({
+      path: "customRoles",
+      select: "name permissions",
+    });
 
     const cv = await CompanyVerification.findOne({ userId: user._id });
     const adminProfile = await AdminProfile.findOne({ owner: user._id });
@@ -66,14 +64,25 @@ export async function getAdminKycStatusHandler(req, res) {
 
     const decision = getAdminKycDecision(cv, config, user);
 
+    // ✅🔥 MAIN FIX (role sync)
+    if (decision === "approved" && user.role !== "admin") {
+      user.role = "admin";
+      user.kyc.status = "approved";
+      await user.save();
+
+      // fresh role send karne ke liye update
+      user = user.toObject();
+      user.role = "admin";
+    }
+
     return res.json({
       success: true,
-      role: user.role,
+      role: user.role, // ✅ ab correct aayega
       customRoles: user.customRoles || [],
       status: decision,
       config,
       reviewedAt: adminProfile.kyc.reviewedAt,
-      details: cv || {}, // ✅ ADD THIS
+      details: cv || {},
     });
   } catch (err) {
     return res.status(500).json({
