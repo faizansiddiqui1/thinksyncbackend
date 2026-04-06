@@ -190,13 +190,13 @@ const spaceSchema = new Schema(
       required: true,
     },
 
-    inventory: {
-      total: { type: Number, default: 0 }, // total offices
-      available: { type: Number, default: 0 }, // available now
-      booked: { type: Number, default: 0 }, // already booked
-      startDateTime: Date,
-      endDateTime: Date,
-    },
+    // inventory: {
+    //   total: { type: Number, default: 0 }, // total offices
+    //   available: { type: Number, default: 0 }, // available now
+    //   booked: { type: Number, default: 0 }, // already booked
+    //   startDateTime: Date,
+    //   endDateTime: Date,
+    // },
 
     bookingRules: {
       supportsHourly: { type: Boolean, default: true },

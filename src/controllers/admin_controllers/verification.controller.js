@@ -75,6 +75,8 @@ export async function getAdminKycStatusHandler(req, res) {
       user.role = "admin";
     }
 
+    const userKycStatus = await svc.buildUserKycPayload(user._id);
+
     return res.json({
       success: true,
       role: user.role, // ✅ ab correct aayega
@@ -83,6 +85,7 @@ export async function getAdminKycStatusHandler(req, res) {
       config,
       reviewedAt: adminProfile.kyc.reviewedAt,
       details: cv || {},
+      userKycStatus,
     });
   } catch (err) {
     return res.status(500).json({
@@ -201,6 +204,24 @@ export async function verifyPanHandler(req, res, next) {
     v.pan.data = raw;
 
     await v.save();
+
+    //
+    const user = await User.findById(userId);
+    if (user) {
+      if (!user.kyc) user.kyc = {};
+
+      user.kyc.pan = {
+        status: verified ? "verified" : "rejected",
+        data: raw,
+        uploadedAt: new Date(),
+      };
+
+      user.kyc.status = await svc.getFinalKycStatus(user); // or set from buildUserKycPayload
+      await user.save();
+    }
+
+    //
+
     await updateAdminKyc(userId);
 
     // ✅ FIX HERE
@@ -489,7 +510,7 @@ export const saveKycImage = async (req, res) => {
 
 export const getKycStatus = async (req, res) => {
   try {
-    const data = await svc.getKycStatus(req.user._id);
+    const data = await svc.buildUserKycPayload(req.user._id);
 
     res.json({
       success: true,

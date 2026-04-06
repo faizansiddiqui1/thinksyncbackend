@@ -58,11 +58,11 @@ const resourceSchema = new Schema(
       monthly: { type: Number, min: 0, default: null },
     },
 
-    inventory: {
-      total: { type: Number, default: 0 },
-      available: { type: Number, default: 0 }, // available now
-      booked: { type: Number, default: 0 }, // already booked
-    },
+    // inventory: {
+    //   total: { type: Number, default: 0 },
+    //   available: { type: Number, default: 0 }, // available now
+    //   booked: { type: Number, default: 0 }, // already booked
+    // },
 
     bookingRules: {
       supportsHourly: { type: Boolean, default: true },

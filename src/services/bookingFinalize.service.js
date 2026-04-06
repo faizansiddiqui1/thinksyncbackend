@@ -29,6 +29,24 @@ function buildPriceBreakdown(temp, bookingAmount) {
   };
 }
 
+function normalizeResources(resources = []) {
+  if (!Array.isArray(resources)) return [];
+
+  return resources
+    .map((r) => {
+      const resourceId = r?.resourceId || r?.id || null;
+      if (!resourceId) return null;
+
+      return {
+        resourceId,
+        name: r?.name || "",
+        type: r?.type || "",
+        unitPrice: Number(r?.unitPrice || 0),
+      };
+    })
+    .filter(Boolean);
+}
+
 export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
   try {
     const temp = await TempBooking.findOne({
@@ -66,9 +84,9 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     }
 
     const user = bookingData.user || {};
-    const finalBookingDoc = {
-      ...bookingData,
+    const normalizedResources = normalizeResources(bookingData.resources);
 
+    const finalBookingDoc = {
       user: {
         userId: bookingData.user?.userId || bookingData.userId || null,
         name: user.name || bookingData.name || "",
@@ -77,11 +95,21 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
       },
 
       space: bookingData.space,
-      resources: Array.isArray(bookingData.resources) ? bookingData.resources : [],
+
+      // ✅ IMPORTANT: save only normalized resources
+      resources: normalizedResources,
+
       plan: bookingData.plan,
+      bookingType: bookingData.bookingType,
       bookingDuration: bookingData.bookingDuration,
-      quantity: bookingData.quantity || { seats: 1, units: 1 },
+
+      startDateTime: bookingData.startDateTime,
+      endDateTime: bookingData.endDateTime,
+      timezone: bookingData.timezone || "Asia/Kolkata",
+
       specialRequests: bookingData.specialRequests || "",
+      notes: bookingData.notes || "",
+      adminNotes: bookingData.adminNotes || "",
 
       priceBreakdown: buildPriceBreakdown(temp, bookingAmount),
 
@@ -96,6 +124,9 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
 
       status: "confirmed",
     };
+
+    // helpful debug
+    console.log("✅ FINAL BOOKING RESOURCES:", finalBookingDoc.resources);
 
     await Booking.create(finalBookingDoc);
 

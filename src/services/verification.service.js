@@ -19,6 +19,7 @@ import {
   getOrCreate,
 } from "../controllers/admin_controllers/verification.controller.js";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
+import CompanyVerification from "../models/admin_models/CompanyVerification.js";
 
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
@@ -72,24 +73,38 @@ export async function getFinalKycStatus(user) {
   const requireFace = await isFaceMatchRequired(user._id);
 
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const faceOk = user?.kyc?.faceMatch?.matched === true;
   const panOk = user?.kyc?.pan?.status === "verified";
+  const faceOk = user?.kyc?.faceMatch?.matched === true;
 
-  // Aadhaar not uploaded
-  if (!user?.kyc?.aadhaar) return "not_submitted";
+  if (!aadhaarOk && !panOk) return "not_submitted";
+  if (!aadhaarOk || !panOk) return "pending";
+  if (requireFace && !faceOk) return "pending";
 
-  // Aadhaar uploaded but OCR not verified
-  if (!aadhaarOk) return "pending";
-
-  // Aadhaar verified and selfie required
-  if (requireFace && !faceOk) return "awaiting_selfie";
-
-  // If PAN required in future, check here
-  // if (requirePan && !panOk) return "awaiting_pan";
-
-  // All required steps complete
   return "approved";
 }
+
+// export async function getFinalKycStatus(user) {
+//   const requireFace = await isFaceMatchRequired(user._id);
+
+//   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
+//   const panOk = user?.kyc?.pan?.status === "verified";
+//   const faceOk = user?.kyc?.faceMatch?.matched === true;
+
+//   // Aadhaar not uploaded
+//   if (!user?.kyc?.aadhaar) return "not_submitted";
+
+//   // Aadhaar uploaded but OCR not verified
+//   if (!aadhaarOk) return "pending";
+
+//   // Aadhaar verified and selfie required
+//   if (requireFace && !faceOk) return "awaiting_selfie";
+
+//   // If PAN required in future, check here
+//   // if (requirePan && !panOk) return "awaiting_pan";
+
+//   // All required steps complete
+//   return "approved";
+// }
 
 export function getUserKycDecision(user) {
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
@@ -102,6 +117,55 @@ export function getUserKycDecision(user) {
   if (!panOk) return "pending"; // agar PAN required hai
 
   return "approved";
+}
+
+export async function buildUserKycPayload(userId) {
+  const [user, admin, cvRaw] = await Promise.all([
+    User.findById(userId).lean(),
+    AdminProfile.findOne({ owner: userId }).lean(),
+    CompanyVerification.findOne({ userId }).lean(),
+  ]);
+
+  const cv = cvRaw || {}; // ✅ VERY IMPORTANT
+
+  if (!user) throw new Error("User not found");
+
+  const requireFaceMatch = admin?.kyc?.config?.requireFaceMatch === true;
+
+  const aadhaarVerified = user?.kyc?.aadhaar?.ocr?.verified === true;
+
+  const panVerified =
+    (cv?.pan && cv.pan.status === "verified") ||
+    (user?.kyc?.pan && user.kyc.pan.status === "verified");
+
+  const faceVerified =
+    !requireFaceMatch || user?.kyc?.faceMatch?.matched === true;
+
+  let status = "not_submitted";
+  if (!user?.kyc?.aadhaar && !panVerified) status = "not_submitted";
+  else if (!aadhaarVerified || !panVerified) status = "pending";
+  else if (requireFaceMatch && !faceVerified) status = "awaiting_selfie";
+  else status = "verified";
+
+  return {
+    status,
+    config: {
+      requireAadhaar: true,
+      requirePan: true,
+      requireFaceMatch,
+    },
+    details: {
+      aadhaar: user?.kyc?.aadhaar ?? {},
+      selfie: user?.kyc?.selfie || {},
+      faceMatch: user?.kyc?.faceMatch || {},
+      pan: cv?.pan ?? user?.kyc?.pan ?? {},
+    },
+    checks: {
+      aadhaarVerified,
+      panVerified,
+      faceVerified,
+    },
+  };
 }
 
 // PAN verify
@@ -359,6 +423,7 @@ export const saveKycImage = async (userId, body) => {
   if (!user.kyc) user.kyc = {};
 
   user.kyc[type] = {
+    
     s3Key: key,
     url,
     uploadedAt: new Date(),
@@ -416,6 +481,11 @@ export const saveKycImage = async (userId, body) => {
         processedAt: new Date(),
       };
 
+      user.kyc.aadhaar.status = verified ? "verified" : "rejected";
+      user.kyc.status = await getFinalKycStatus(user);
+
+      await user.save();
+
       // ALSO save same full response into CompanyVerification (exactly like CIN/PAN)
       try {
         const cv = await getOrCreate(userId);
@@ -442,35 +512,11 @@ export const saveKycImage = async (userId, body) => {
       };
     }
   }
-  
-  user.kycStatus = await getFinalKycStatus(user); // admin logic (same)
 
- 
+  user.kyc.status = await getFinalKycStatus(user); // admin logic (same)
 
   await user.save();
 
   return user.kyc[type];
 };
 
-// Get kyc status
-export async function getKycStatus(userId) {
-  const user = await User.findById(userId).lean();
-  if (!user) throw new Error("User not found");
-
-  const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const faceOk = user?.kyc?.faceMatch?.matched === true;
-  const panOk = !user?.kyc?.pan || user?.kyc?.pan?.status === "verified";
-
-  let status = "not_started";
-
-  if (aadhaarOk && faceOk && panOk) status = "verified";
-  else if (user?.kyc?.aadhaar || user?.kyc?.selfie) status = "pending";
-
-  return {
-    status,
-    aadhaar: aadhaarOk,
-    faceMatch: faceOk,
-    pan: panOk,
-    score: user?.kyc?.faceMatch?.score || 0,
-  };
-}

@@ -16,11 +16,13 @@ const priceBreakdownSchema = new mongoose.Schema(
 
 const resourceItemSchema = new mongoose.Schema(
   {
-    resourceId: { type: mongoose.Schema.Types.ObjectId },
+    resourceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true, // ✅ add this
+    },
     name: String,
     type: String,
     unitPrice: { type: Number, default: 0 },
-    qty: { type: Number, default: 1 },
   },
   { _id: false },
 );
@@ -29,9 +31,9 @@ const bookingSchema = new mongoose.Schema(
   {
     user: {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      name: { type: String, required: true },
-      email: { type: String, required: true },
-      phone: { type: String, required: true },
+      name: { type: String },
+      email: { type: String },
+      phone: { type: String },
     },
 
     space: {
@@ -75,11 +77,6 @@ const bookingSchema = new mongoose.Schema(
     endDateTime: { type: Date, required: true, index: true },
     timezone: { type: String, default: "Asia/Kolkata" },
 
-    quantity: {
-      seats: { type: Number, default: 1 },
-      units: { type: Number, default: 1 },
-    },
-
     priceBreakdown: {
       type: priceBreakdownSchema,
       default: () => ({}), // ⭐⭐⭐ FINAL FIX
@@ -104,7 +101,7 @@ const bookingSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
-    
+
     payment: {
       method: {
         type: String,
@@ -171,11 +168,14 @@ bookingSchema.pre("validate", async function (next) {
       return next(); // ✅ skip recalculation
     }
 
+    // 🔥 auto hold 15 min
+    if (!this.holdExpiresAt) {
+      this.holdExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    }
+
     if (!this.priceBreakdown) this.priceBreakdown = {};
 
     this.calculateDuration();
-
-    const units = this.quantity?.units || 1;
 
     let duration = 1;
     if (this.plan?.type === "hourly") {
@@ -186,16 +186,18 @@ bookingSchema.pre("validate", async function (next) {
 
     let baseAmount = 0;
 
+    // plan price
     if (this.plan?.planId) {
       const plan = await PricingPlan.findById(this.plan.planId);
       if (!plan) return next(new Error("Invalid pricing plan"));
 
-      baseAmount += (plan.price || 0) * units * duration;
+      baseAmount += (plan.price || 0) * duration;
     }
 
+    // resources price
     if (Array.isArray(this.resources)) {
       this.resources.forEach((r) => {
-        baseAmount += Number(r.unitPrice || 0) * Number(r.qty || 1);
+        baseAmount += Number(r.unitPrice || 0);
       });
     }
 
@@ -239,36 +241,25 @@ bookingSchema.methods.calculateDuration = function () {
 // ===============================
 bookingSchema.statics.checkAvailability = async function (
   resourceId,
-  startDate,
-  endDate,
-  requestedQty = 1,
+  startDateTime,
+  endDateTime,
 ) {
-  const bookings = await this.find({
-    status: "confirmed",
+  const conflict = await this.findOne({
     "resources.resourceId": resourceId,
-    "bookingDuration.startDate": { $lt: endDate },
-    "bookingDuration.endDate": { $gt: startDate },
+    status: { $in: ["pending_hold", "confirmed"] },
+
+    // 🔥 ADD THIS LINE
+    $or: [
+      { status: "confirmed" },
+      { holdExpiresAt: { $gt: new Date() } }, // only active holds
+    ],
+
+    startDateTime: { $lt: endDateTime },
+    endDateTime: { $gt: startDateTime },
   });
 
-  const totalBooked = bookings.reduce((sum, b) => {
-    const resource = b.resources.find(
-      (r) => r.resourceId.toString() === resourceId.toString(),
-    );
-    return sum + (resource?.qty || 0);
-  }, 0);
-
-  const Resource = mongoose.model("Resource");
-  const resourceDoc = await Resource.findById(resourceId);
-
-  const capacity = resourceDoc?.inventory?.total || 1;
-
-  const availableUnits = capacity - totalBooked;
-
   return {
-    available: availableUnits >= requestedQty,
-    availableUnits,
-    totalBooked,
-    capacity,
+    available: !conflict,
   };
 };
 
