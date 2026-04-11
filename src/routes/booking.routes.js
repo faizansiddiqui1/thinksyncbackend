@@ -14,6 +14,9 @@ import {
   updatePaymentStatus,
   verifyRazorpayPayment,
   getOwnerBookings,
+  getMyBookings,
+  getMyBookingById,
+  cancelMyBooking,
 } from "../controllers/user_controllers/booking.controller.js";
 
 import { saveGatewayCredentials } from "../controllers/admin_controllers/payment.controller.js";
@@ -26,6 +29,15 @@ import Booking from "../models/user_models/Booking.js";
 const router = express.Router();
 
 router.post("/booking", createBooking);
+
+
+
+router.get("/me/bookings", requireAuth, getMyBookings);
+router.get("/me/bookings/:id", requireAuth, getMyBookingById);
+router.post("/me/bookings/:id/cancel", requireAuth, cancelMyBooking);
+
+
+
 
 router.get("/owner/bookings", requireAuth, requireAdminAccess, getOwnerBookings);
 

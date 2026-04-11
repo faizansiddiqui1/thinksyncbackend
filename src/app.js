@@ -21,9 +21,9 @@ import resourceRoutes from "./routes/resource.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import CompanyVerificationRoutes from "./routes/companyverification.routes.js";
 import BookingRoutes from "./routes/booking.routes.js";
+import whiteLabelRoutes from "./routes/whiteLabel.routes.js"
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
-
 
 
 dotenv.config();
@@ -126,6 +126,9 @@ app.use("/api", adminRoutes);
 
 app.use("/api/admin/smtp", smtpRoutes);
 app.use("/api", CompanyVerificationRoutes);
+
+// white label routes
+app.use("/api/whitelabel", whiteLabelRoutes);
 
 /* -------------------------
    404 and error handler

@@ -10,10 +10,15 @@ import { finalizeTempBooking } from "../../services/bookingFinalize.service.js";
 
 export const createBooking = async (req, res) => {
   try {
+
+    console.log("Booking payload cheack", req.body);
+    
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
+
 
     // Pass tenantId if provided in body/header, else derive from space
     const tenantIdOverride =
@@ -143,6 +148,69 @@ export const getOwnerBookings = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+// Get all user booking by user._id
+export const getMyBookings = async (req, res) => {
+  try {
+    const filters = {
+      status: req.query.status,
+      upcoming: req.query.upcoming === "true",
+      past: req.query.past === "true",
+      page: req.query.page ? Number(req.query.page) : 1,
+      limit: req.query.limit ? Number(req.query.limit) : 20,
+    };
+
+    const result = await bookingService.getMyBookings(req.user._id, filters);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// get user booking by id
+export const getMyBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await bookingService.getMyBookingById(req.user._id, id);
+
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// cancle user booking by id
+export const cancelMyBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const result = await bookingService.cancelMyBooking(
+      req.user._id,
+      id,
+      reason || ""
+    );
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+
+
 
 
 

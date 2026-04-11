@@ -25,7 +25,7 @@ router.post("/verification/pan", requireAuth, verifyPanHandler);
 // Company pan
 router.post("/verification/company-pan", requireAuth, verifyCompanyPanHandler);
 
-// GST 
+// GST
 router.post("/verification/gst", requireAuth, verifyGstHandler);
 
 // CIN
@@ -46,11 +46,9 @@ router.post(
 router.post("/kyc/presign", requireAuth, getPresignForKycImage);
 router.post("/kyc/save", requireAuth, saveKycImage);
 
-
 router.get("/kyc/status", requireAuth, getKycStatus);
 
-
-// Super admin routes 
+// Super admin routes
 router.get("/kyc/admin/status", requireAuth, getAdminKycStatusHandler);
 
 export default router;

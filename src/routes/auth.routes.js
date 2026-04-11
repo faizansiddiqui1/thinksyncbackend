@@ -19,7 +19,7 @@ router.post("/signup", otpRateLimiter, signup);
 router.post("/login", otpRateLimiter, login);
 
 // router.post("/send-otp", otpRateLimiter, sendOtpHandler);
-router.post("/send-otp", sendOtpHandler);
+router.post("/send-otp",  sendOtpHandler);
 
 router.post("/verify-otp", verifyOtp);
 router.post("/refresh-token", refreshAccessToken);

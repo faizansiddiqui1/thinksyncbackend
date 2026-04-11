@@ -48,7 +48,7 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     const originalAmount = Number(
       bookingData.totalAmount || bookingData.total || 0,
     );
-    
+
     if (originalAmount <= 0) {
       return {
         success: false,
@@ -211,7 +211,6 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
   }
 };
 
-
 export const getOwnerBookings = async (ownerId, filters = {}) => {
   try {
     const {
@@ -226,7 +225,9 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
     const skip = (page - 1) * limit;
 
     // 1) Find all spaces owned by this admin
-    const spaces = await Space.find({ owner: ownerId }).select("_id name owner");
+    const spaces = await Space.find({ owner: ownerId }).select(
+      "_id name owner",
+    );
     const spaceIds = spaces.map((s) => s._id);
 
     if (!spaceIds.length) {
@@ -282,7 +283,9 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
         .skip(skip)
         .limit(limit),
       Booking.countDocuments(query),
-      Booking.find(query).select("status startDateTime endDateTime holdExpiresAt"),
+      Booking.find(query).select(
+        "status startDateTime endDateTime holdExpiresAt",
+      ),
     ]);
 
     // 3) Stats for dashboard
@@ -316,7 +319,8 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
           holdExpiresInMs: holdMs,
           isUpcoming: startMs > 0,
           isActive: startMs <= 0 && endMs >= 0,
-          isExpiredHold: obj.status === "pending_hold" && holdMs !== null && holdMs <= 0,
+          isExpiredHold:
+            obj.status === "pending_hold" && holdMs !== null && holdMs <= 0,
         },
       };
     });
@@ -339,16 +343,83 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
   }
 };
 
-
-
-
-
-/* =========================
-   Get Booking By ID
-========================= */
-export const getBookingById = async (id) => {
+export const getMyBookings = async (userId, filters = {}) => {
   try {
-    const booking = await Booking.findById(id)
+    const { status, upcoming, past, page = 1, limit = 20 } = filters;
+
+    const query = { "user.userId": userId };
+
+    if (status) query.status = status;
+    if (upcoming) query.startDateTime = { $gte: new Date() };
+    if (past) query.endDateTime = { $lt: new Date() };
+
+    const skip = (page - 1) * limit;
+
+    const bookings = await Booking.find(query)
+      .populate({
+        path: "space",
+        select: "name slug address startingPrice",
+        populate: {
+          path: "media",
+          select: "images video",
+        },
+      })
+      .populate({
+        path: "resources.resourceId",
+        model: "Resource", // ✅ FIX (VERY IMPORTANT)
+        select: "name type images",
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(); // ✅ performance + clean object
+
+    // ✅ FIXED IMAGE LOGIC
+    const bookingsWithImage = bookings.map((b) => {
+      // 🔥 find first resource that has image
+      const resourceWithImage = b.resources?.find(
+        (r) =>
+          r.resourceId &&
+          Array.isArray(r.resourceId.images) &&
+          r.resourceId.images.length > 0,
+      );
+
+      const resourceImage =
+        resourceWithImage?.resourceId?.images?.[0]?.url || null;
+
+      const spaceImage = b.space?.media?.images?.[0]?.url || null;
+
+      return {
+        ...b,
+        displayImage: resourceImage || spaceImage || null,
+      };
+    });
+
+    const total = await Booking.countDocuments(query);
+
+    return {
+      success: true,
+      data: {
+        bookings: bookingsWithImage,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+export const getMyBookingById = async (userId, bookingId) => {
+  try {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      "user.userId": userId,
+    })
       .populate("space")
       .populate("user.userId");
 
@@ -362,41 +433,50 @@ export const getBookingById = async (id) => {
   }
 };
 
-/* =========================
-   Get User Bookings
-========================= */
-export const getUserBookings = async (userId, filters = {}) => {
+export const cancelMyBooking = async (userId, bookingId, reason = "") => {
   try {
-    const { status, upcoming, past, page = 1, limit = 20 } = filters;
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      "user.userId": userId,
+    }).populate("space");
 
-    const query = { "user.userId": userId };
+    if (!booking) {
+      return { success: false, error: "Booking not found" };
+    }
 
-    if (status) query.status = status;
-    if (upcoming) query["bookingDuration.startDate"] = { $gte: new Date() };
-    if (past) query["bookingDuration.endDate"] = { $lt: new Date() };
+    if (booking.status === "cancelled") {
+      return { success: false, error: "Booking already cancelled" };
+    }
 
-    const skip = (page - 1) * limit;
+    const hoursUntilStart = dayjs(booking.bookingDuration.startDate).diff(
+      dayjs(),
+      "hour",
+    );
 
-    const bookings = await Booking.find(query)
-      .populate("space", "name slug images address")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+    let refundAmount = 0;
+    if (hoursUntilStart > 24) {
+      refundAmount = booking.priceBreakdown.totalAmount;
+    } else if (hoursUntilStart > 12) {
+      refundAmount = booking.priceBreakdown.totalAmount * 0.5;
+    }
 
-    const total = await Booking.countDocuments(query);
-
-    return {
-      success: true,
-      data: {
-        bookings,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      },
+    booking.status = "cancelled";
+    booking.cancellation = {
+      cancelledBy: "user",
+      cancelledAt: new Date(),
+      reason,
+      refundAmount,
     };
+
+    if (refundAmount > 0 && booking.payment.status === "paid") {
+      booking.payment.status = "refunded";
+      booking.payment.refundedAt = new Date();
+      booking.payment.refundAmount = refundAmount;
+    }
+
+    await booking.save();
+
+    return { success: true, data: booking, refundAmount };
   } catch (error) {
     return { success: false, error: error.message };
   }

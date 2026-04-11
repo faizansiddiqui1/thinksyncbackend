@@ -87,12 +87,21 @@ const AdminProfileSchema = new Schema(
         enum: ["pending", "approved", "rejected"],
         default: "pending",
       },
+      requestedDomain: String, // 🔥 ADD THIS
+
       approvedAt: Date,
       approvedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User", // super admin
       },
+
+      // 🔥 ADD THIS
+      usePlatformCredentials: {
+        type: Boolean,
+        default: false, // default platform creds use karega
+      },
     },
+
     kyc: { type: KycSchema, default: () => ({}) },
     createdAt: Date,
     updatedAt: Date,

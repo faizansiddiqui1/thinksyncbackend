@@ -42,6 +42,7 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
 
+   spaceType: { type: String },
     // ===============================
     // ✅ RESOURCE ARRAY (FIXED)
     // ===============================

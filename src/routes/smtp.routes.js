@@ -1,5 +1,7 @@
+
+
 import express from "express";
-import { createSmtp, listSmtps, getSmtp, deleteSmtp, toggleSmtpStatus, updateSmtp } from "../models/super_admin_models/smtpController.js";
+import { createSmtp, listSmtps, getSmtp, deleteSmtp, toggleSmtpStatus, updateSmtp } from "../controllers/super_admin_controllers/smtpController.js";
 
 const router = express.Router();
 
@@ -12,3 +14,5 @@ router.patch("/:id/status", toggleSmtpStatus);
 router.delete("/:id", deleteSmtp);
 
 export default router;
+
+

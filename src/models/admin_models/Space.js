@@ -186,7 +186,7 @@ const spaceSchema = new Schema(
         "managed_office",
         "virtual_office",
         "event_space",
-      ],
+      ], 
       required: true,
     },
 

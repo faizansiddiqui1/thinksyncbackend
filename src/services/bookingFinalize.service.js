@@ -69,7 +69,9 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     const bookingData = temp.bookingData || {};
     const userId = getUserIdFromBookingData(bookingData);
     const spaceId = bookingData.space;
-    const bookingAmount = Number(temp.totalAmount || bookingData.totalAmount || 0);
+    const bookingAmount = Number(
+      temp.totalAmount || bookingData.totalAmount || 0,
+    );
 
     let redeemed = null;
 
@@ -94,7 +96,9 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
         phone: user.phone || bookingData.phone || "",
       },
 
-      space: bookingData.space,
+      spaceType: bookingData.spaceType,
+
+      space: bookingData.space, 
 
       // ✅ IMPORTANT: save only normalized resources
       resources: normalizedResources,
