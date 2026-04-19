@@ -1,19 +1,19 @@
-import {
-  cfPost,
-  cfGetFull,
-  payoutBankSyncUrl,
-  cfMultipartPost,
-} from "../utils/cashfreeClient.js";
+import { cfPost, cfMultipartPost } from "../utils/cashfreeClient.js";
 import { ApiError } from "../utils/apiResponse.js";
 import fs from "fs";
 import FormDataPkg from "form-data";
-
-// For images save
-import { createPresignedUpload, publicUrlForKey, s3 } from "../config/s3.js";
 import mime from "mime-types";
 import User from "../models/user_models/User.js";
-import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
-import axios from "axios";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import {
+  createPresignedUpload,
+  publicUrlForKey,
+  resolveAwsConfig,
+} from "../config/s3.js";
 import {
   ensureField,
   getOrCreate,
@@ -23,6 +23,27 @@ import CompanyVerification from "../models/admin_models/CompanyVerification.js";
 
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
+
+const s3ClientCache = new Map();
+
+function getS3Client(aws) {
+  const cacheKey = `${aws.accessKeyId}_${aws.region}`;
+
+  if (s3ClientCache.has(cacheKey)) {
+    return s3ClientCache.get(cacheKey);
+  }
+
+  const client = new S3Client({
+    region: aws.region,
+    credentials: {
+      accessKeyId: aws.accessKeyId,
+      secretAccessKey: aws.secretAccessKey,
+    },
+  });
+
+  s3ClientCache.set(cacheKey, client);
+  return client;
+}
 
 async function isFaceMatchRequired(userId) {
   const admin = await AdminProfile.findOne({ owner: userId }).lean();
@@ -34,38 +55,38 @@ function isVerified(raw) {
   return !!(
     raw?.valid === true ||
     raw?.status === "SUCCESS" ||
-    raw?.status === "VALID" || // 👈 ADD THIS
+    raw?.status === "VALID" ||
     raw?.verification_status === "VERIFIED" ||
     raw?.isValid === true ||
     raw?.account_exists === true ||
-    raw?.account_status === "VALID" || // 👈 ADD THIS
-    raw?.account_status_code === "ACCOUNT_IS_VALID" // 👈 optional safety
+    raw?.account_status === "VALID" ||
+    raw?.account_status_code === "ACCOUNT_IS_VALID"
   );
 }
 
-//  Download file from S3 using signed GET url
-async function getBufferFromS3(key) {
-  const bucket = process.env.AWS_BUCKET_NAME;
+// Download file from S3 using tenant-aware client
+async function getBufferFromS3(key, tenant) {
+  const aws = await resolveAwsConfig(tenant);
+  const client = getS3Client(aws);
 
-  const obj = await s3.send(
+  const obj = await client.send(
     new GetObjectCommand({
-      Bucket: bucket,
+      Bucket: aws.bucketName,
       Key: key,
     }),
   );
 
   const stream = obj.Body;
+  if (!stream) {
+    throw new Error("S3 object body missing");
+  }
 
   const chunks = [];
   for await (const chunk of stream) {
     chunks.push(chunk);
   }
 
-  const buffer = Buffer.concat(chunks);
-
-  console.log("Downloaded bytes:", buffer.length);
-
-  return buffer;
+  return Buffer.concat(chunks);
 }
 
 // FINAL KYC DECISION
@@ -83,38 +104,13 @@ export async function getFinalKycStatus(user) {
   return "approved";
 }
 
-// export async function getFinalKycStatus(user) {
-//   const requireFace = await isFaceMatchRequired(user._id);
-
-//   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-//   const panOk = user?.kyc?.pan?.status === "verified";
-//   const faceOk = user?.kyc?.faceMatch?.matched === true;
-
-//   // Aadhaar not uploaded
-//   if (!user?.kyc?.aadhaar) return "not_submitted";
-
-//   // Aadhaar uploaded but OCR not verified
-//   if (!aadhaarOk) return "pending";
-
-//   // Aadhaar verified and selfie required
-//   if (requireFace && !faceOk) return "awaiting_selfie";
-
-//   // If PAN required in future, check here
-//   // if (requirePan && !panOk) return "awaiting_pan";
-
-//   // All required steps complete
-//   return "approved";
-// }
-
 export function getUserKycDecision(user) {
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
   const panOk = user?.kyc?.pan?.status === "verified";
 
   if (!user?.kyc?.aadhaar) return "not_submitted";
-
   if (!aadhaarOk) return "pending";
-
-  if (!panOk) return "pending"; // agar PAN required hai
+  if (!panOk) return "pending";
 
   return "approved";
 }
@@ -126,12 +122,11 @@ export async function buildUserKycPayload(userId) {
     CompanyVerification.findOne({ userId }).lean(),
   ]);
 
-  const cv = cvRaw || {}; // ✅ VERY IMPORTANT
+  const cv = cvRaw || {};
 
   if (!user) throw new Error("User not found");
 
   const requireFaceMatch = admin?.kyc?.config?.requireFaceMatch === true;
-
   const aadhaarVerified = user?.kyc?.aadhaar?.ocr?.verified === true;
 
   const panVerified =
@@ -169,20 +164,9 @@ export async function buildUserKycPayload(userId) {
 }
 
 // PAN verify
-export async function verifyPan(pan, name) {
+export async function verifyPan({ tenant, pan, name }) {
   try {
-    const res = await cfPost("/pan", { pan, name });
-
-    //  const type = (res?.type || "").toLowerCase();
-
-    // // ✔ Accept both Company + Business (future safe)
-    // const isIndividual =
-    // type === "Individual"
-
-    // if (!isIndividual) {
-    //   throw new ApiError(400, "Please enter Valid Individual PAN number");
-    // }
-
+    const res = await cfPost(tenant, "/pan", { pan, name });
     return { raw: res, verified: isVerified(res) };
   } catch (err) {
     const msg = err?.response?.data?.message || err?.message || String(err);
@@ -190,15 +174,14 @@ export async function verifyPan(pan, name) {
   }
 }
 
-export async function verifyCompanyPan(pan, name) {
+export async function verifyCompanyPan({ tenant, pan, name }) {
   try {
-    const res = await cfPost("/pan", { pan, name });
+    const res = await cfPost(tenant, "/pan", { pan, name });
 
     console.log("PAN RESPONSE:", res);
 
     const type = (res?.type || "").toLowerCase();
 
-    // ✅ STRICT COMPANY CHECK
     const isCompany =
       type === "company" ||
       type === "business" ||
@@ -215,14 +198,14 @@ export async function verifyCompanyPan(pan, name) {
     return { raw: res, verified: true };
   } catch (err) {
     const msg = err?.response?.data?.message || err?.message || String(err);
-    throw new ApiError(err?.statusCode || 500, msg);
+    throw new ApiError(err?.response?.status || err?.statusCode || 500, msg);
   }
 }
 
 // GSTIN verify
-export async function verifyGstin(gstin) {
+export async function verifyGstin({ tenant, gstin }) {
   try {
-    const res = await cfPost("/gstin", { GSTIN: gstin }); // ✅ FIX
+    const res = await cfPost(tenant, "/gstin", { GSTIN: gstin });
 
     return {
       raw: res,
@@ -232,24 +215,22 @@ export async function verifyGstin(gstin) {
     const msg =
       err?.response?.data?.message || err?.message || "GST verification failed";
 
-    throw new ApiError(400, msg);
+    throw new ApiError(err?.response?.status || 400, msg);
   }
 }
 
 // CIN verify
-export async function verifyCin(cin) {
+export async function verifyCin({ tenant, cin }) {
   try {
-    const res = await cfPost("/cin", {
+    const res = await cfPost(tenant, "/cin", {
       verification_id: `cin_${Date.now()}`,
-      cin: cin,
+      cin,
     });
 
     console.log("RAW CIN RESPONSE:", res);
 
     return {
       raw: res,
-
-      // ✅ FINAL FIX
       verified: res?.status === "VALID",
     };
   } catch (err) {
@@ -259,18 +240,18 @@ export async function verifyCin(cin) {
       err?.message ||
       "CIN verification failed";
 
-    throw new ApiError(400, msg);
+    throw new ApiError(err?.response?.status || 400, msg);
   }
 }
 
-// Bank sync (payout API GET)
-export async function verifyBankSync(account, ifsc) {
+// Bank sync (payout API)
+export async function verifyBankSync({ tenant, account, ifsc }) {
   try {
-    const url = payoutBankSyncUrl();
-    const res = await cfPost("/bank-account/sync", {
+    const res = await cfPost(tenant, "/bank-account/sync", {
       bank_account: account,
-      ifsc: ifsc,
+      ifsc,
     });
+
     return { raw: res, verified: isVerified(res) };
   } catch (err) {
     const msg = err?.response?.data?.message || err?.message || String(err);
@@ -279,7 +260,7 @@ export async function verifyBankSync(account, ifsc) {
 }
 
 // Aadhaar OCR
-export async function verifyAadhaarOCR(input, opts = {}) {
+export async function verifyAadhaarOCR({ tenant, input, opts = {} }) {
   const payload = {
     verification_id: opts.verification_id || `aadhaar_${Date.now()}`,
     document_type: opts.document_type || "AADHAAR",
@@ -290,7 +271,7 @@ export async function verifyAadhaarOCR(input, opts = {}) {
   // URL case -> JSON POST
   if (typeof input === "string") {
     const body = { ...payload, file_url: input };
-    const response = await cfPost("/bharat-ocr", body);
+    const response = await cfPost(tenant, "/bharat-ocr", body);
     return { raw: response, verified: isVerified(response) };
   }
 
@@ -304,17 +285,14 @@ export async function verifyAadhaarOCR(input, opts = {}) {
     form.append("document_type", payload.document_type);
     form.append("do_verification", payload.do_verification ? "true" : "false");
 
-    // Determine file buffer and filename/mimetype
     const fileBuffer = isBufferDirect ? input : input.buffer;
     const filename =
       (input && (input.originalname || input.filename)) || "aadhaar.jpg";
     const contentType = (input && input.mimetype) || "image/jpeg";
 
-    // Append file as Buffer with filename and contentType
     form.append("file", Buffer.from(fileBuffer), { filename, contentType });
 
-    // pass form-data instance to cfMultipartPost which will use form.getHeaders()
-    const response = await cfMultipartPost("/bharat-ocr", form);
+    const response = await cfMultipartPost(tenant, "/bharat-ocr", form);
     return { raw: response, verified: isVerified(response) };
   }
 
@@ -324,11 +302,14 @@ export async function verifyAadhaarOCR(input, opts = {}) {
     form.append("verification_id", payload.verification_id);
     form.append("document_type", payload.document_type);
     form.append("do_verification", payload.do_verification ? "true" : "false");
+
     const stream = fs.createReadStream(input.path);
     const filename =
       input.originalname || input.filename || input.path.split("/").pop();
+
     form.append("file", stream, { filename });
-    const response = await cfMultipartPost("/bharat-ocr", form);
+
+    const response = await cfMultipartPost(tenant, "/bharat-ocr", form);
     return { raw: response, verified: isVerified(response) };
   }
 
@@ -337,15 +318,17 @@ export async function verifyAadhaarOCR(input, opts = {}) {
   );
 }
 
-// KYC IMAGES SAVE IN DB services
-export const getPresignForKycImage = async (userId, body) => {
+// KYC image presign
+export const getPresignForKycImage = async (userId, body, tenant) => {
   const { filename, contentType, type } = body;
 
-  if (!filename || !contentType || !type)
+  if (!filename || !contentType || !type) {
     throw new Error("filename, contentType and type required");
+  }
 
-  if (!["aadhaar", "selfie", "pan"].includes(type))
+  if (!["aadhaar", "selfie", "pan"].includes(type)) {
     throw new Error("Invalid image type");
+  }
 
   const ext = filename.includes(".")
     ? filename.substring(filename.lastIndexOf("."))
@@ -353,34 +336,34 @@ export const getPresignForKycImage = async (userId, body) => {
 
   const key = `kyc/${userId}/${type}_${Date.now()}${ext}`;
 
-  const { uploadUrl, expiresIn } = await createPresignedUpload({
-    key,
-    contentType,
-    expiresSeconds: 900,
-  });
+  const { uploadUrl, expiresIn, bucketName, region } =
+    await createPresignedUpload({
+      tenant,
+      key,
+      contentType,
+      expiresSeconds: 900,
+    });
 
-  const url = publicUrlForKey({ key });
+  const url = publicUrlForKey({ bucketName, region, key });
 
   return { uploadUrl, key, url, expiresIn };
 };
 
 // Face match selfie vs Aadhaar
-export async function faceMatchS3(selfieKey, aadhaarKey) {
+export async function faceMatchS3(selfieKey, aadhaarKey, tenant) {
   if (!selfieKey || !aadhaarKey) {
     throw new Error("selfieKey and aadhaarKey required");
   }
 
-  const selfieBuffer = await getBufferFromS3(selfieKey);
-  const aadhaarBuffer = await getBufferFromS3(aadhaarKey);
+  const selfieBuffer = await getBufferFromS3(selfieKey, tenant);
+  const aadhaarBuffer = await getBufferFromS3(aadhaarKey, tenant);
 
   console.log("Selfie bytes:", selfieBuffer.length);
   console.log("Aadhaar bytes:", aadhaarBuffer.length);
 
   const form = new FormDataNode();
-
   form.append("verification_id", `face_${Date.now()}`);
 
-  // IMPORTANT: pass Buffer directly
   form.append("first_image", selfieBuffer, {
     filename: "selfie.jpg",
     contentType: "image/jpeg",
@@ -391,31 +374,32 @@ export async function faceMatchS3(selfieKey, aadhaarKey) {
     contentType: "image/jpeg",
   });
 
-  // IMPORTANT: pass FormData instance directly
-  return cfMultipartPost("/face-match", form);
+  return cfMultipartPost(tenant, "/face-match", form);
 }
 
-// Saved kyc images with all verification
-export const saveKycImage = async (userId, body) => {
+// Save KYC images in DB
+export const saveKycImage = async (userId, body, tenant) => {
   const { key, type } = body;
 
   if (!key || !type) {
     throw new Error("key and type required");
   }
 
-  const bucket = process.env.AWS_BUCKET_NAME;
-  const region = process.env.AWS_REGION;
+  const aws = await resolveAwsConfig(tenant);
+  const client = getS3Client(aws);
 
-  // 🔐 VERIFY FILE EXISTS IN S3
-  await s3.send(
+  await client.send(
     new HeadObjectCommand({
-      Bucket: bucket,
+      Bucket: aws.bucketName,
       Key: key,
     }),
   );
 
-  // build url on backend (never trust client)
-  const url = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+  const url = publicUrlForKey({
+    bucketName: aws.bucketName,
+    region: aws.region,
+    key,
+  });
 
   const user = await User.findById(userId);
   if (!user) throw new Error("User not found");
@@ -423,13 +407,10 @@ export const saveKycImage = async (userId, body) => {
   if (!user.kyc) user.kyc = {};
 
   user.kyc[type] = {
-    
     s3Key: key,
     url,
     uploadedAt: new Date(),
   };
-
-  // after user.kyc[type] = { ... }
 
   if (type === "selfie") {
     try {
@@ -438,8 +419,7 @@ export const saveKycImage = async (userId, body) => {
       const aadhaarKey = user.kyc?.aadhaar?.s3Key;
       if (!aadhaarKey) throw new Error("Upload Aadhaar first");
 
-      const matchRaw = await faceMatchS3(key, aadhaarKey);
-
+      const matchRaw = await faceMatchS3(key, aadhaarKey, tenant);
       const matched = matchRaw?.face_match_result === "YES";
 
       user.kyc.faceMatch = {
@@ -459,22 +439,17 @@ export const saveKycImage = async (userId, body) => {
     }
   }
 
-  // AUTO AADHAR OCR SCANNING
   if (type === "aadhaar") {
     try {
       console.log("Running Aadhar OCR...");
 
-      // download from S3
-      const response = await axios.get(url, {
-        responseType: "arraybuffer",
+      const buffer = await getBufferFromS3(key, tenant);
+
+      const { raw: ocrRaw, verified } = await verifyAadhaarOCR({
+        tenant,
+        input: buffer,
       });
 
-      const buffer = Buffer.from(response.data);
-
-      // send buffer to verifyAadhaarOCR -> now returns { raw, verified }
-      const { raw: ocrRaw, verified } = await verifyAadhaarOCR(buffer);
-
-      // save in user's kyc object (full response + verified flag)
       user.kyc.aadhaar.ocr = {
         raw: ocrRaw,
         verified,
@@ -486,17 +461,14 @@ export const saveKycImage = async (userId, body) => {
 
       await user.save();
 
-      // ALSO save same full response into CompanyVerification (exactly like CIN/PAN)
       try {
         const cv = await getOrCreate(userId);
         ensureField(cv, "aadhaar");
         cv.aadhaar.status = verified ? "verified" : "rejected";
-        // Save full API response under data (same pattern as other docs)
         cv.aadhaar.data = ocrRaw;
         cv.aadhaar.savedAt = new Date();
         await cv.save();
       } catch (adminErr) {
-        // don't break user flow if admin save fails; log for debugging
         console.error(
           "Failed to save Aadhaar to CompanyVerification:",
           adminErr,
@@ -513,10 +485,8 @@ export const saveKycImage = async (userId, body) => {
     }
   }
 
-  user.kyc.status = await getFinalKycStatus(user); // admin logic (same)
-
+  user.kyc.status = await getFinalKycStatus(user);
   await user.save();
 
   return user.kyc[type];
 };
-

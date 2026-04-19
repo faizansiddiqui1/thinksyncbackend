@@ -14,17 +14,22 @@ import mongoose from "mongoose";
 export const sendOtpHandler = async (req, res) => {
   try {
     const { identifier, username, intent } = req.body;
+    const tenant = req.context?.tenant || null;
 
     if (!identifier) {
       return res.status(400).json({ message: "Email or phone required" });
     }
 
-    // 👇 important change
-    const result = await sendOtp({ identifier, username, intent });
+    const result = await sendOtp({
+      identifier,
+      username,
+      intent,
+      tenant,
+    });
 
     return res.status(200).json({
       message: "OTP sent",
-      role: result.role,   // 👈 ADD THIS
+      role: result.role,
     });
   } catch (error) {
     return res.status(400).json({ message: error.message });
@@ -32,10 +37,10 @@ export const sendOtpHandler = async (req, res) => {
 };
 
 
-
 export const signup = async (req, res) => {
   try {
     const { username, identifier } = req.body;
+    const tenant = req.context?.tenant || null;
 
     if (!username || !identifier) {
       return res
@@ -43,44 +48,42 @@ export const signup = async (req, res) => {
         .json({ message: "Username and email or phone required" });
     }
 
-    await sendSignupOTP({ username, identifier });
+    await sendSignupOTP({ username, identifier, tenant });
     res.status(200).json({ message: "OTP sent for signup" });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
-}; 
+};
 
-
-
+ 
 export const login = async (req, res) => {
   try {
     const { identifier } = req.body;
+    const tenant = req.context?.tenant || null;
 
     if (!identifier) {
-      return res
-        .status(400)
-        .json({ message: "Email or phone required" });
+      return res.status(400).json({ message: "Email or phone required" });
     }
 
-    await sendLoginOTP(identifier);
+    await sendLoginOTP(identifier, tenant);
     res.status(200).json({ message: "OTP sent for login" });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 };
 
+
 export const verifyOtp = async (req, res) => {
   try {
     const { identifier, otp, intent } = req.body;
 
-    // Get IP
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
-
     const userAgent = req.headers["user-agent"];
 
-    if (!identifier || !otp)
+    if (!identifier || !otp) {
       return res.status(400).json({ message: "Identifier and OTP required" });
+    }
 
     const { accessToken, refreshToken, user } = await verifyOTPAndCreateTokens(
       identifier,
@@ -92,16 +95,16 @@ export const verifyOtp = async (req, res) => {
       { intent },
     );
 
-    // Set cookie (controller handles res)
     const cookieOptions = getRefreshCookieOptions();
     res.cookie("refreshToken", refreshToken, cookieOptions);
 
-    // send only access token & public user fields
     res.status(200).json({ accessToken, user: user.toJSON() });
   } catch (error) {
     res.status(401).json({ message: error.message });
   }
 };
+
+
 
 export const refreshAccessToken = async (req, res) => {
   try {

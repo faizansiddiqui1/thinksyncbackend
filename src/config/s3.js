@@ -1,61 +1,115 @@
-// lib/s3.js
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { getCredentials } from "../services/credentialResolver.js";
 
-const region = process.env.AWS_REGION;
-const bucket = process.env.AWS_BUCKET_NAME;
-
-if (!region || !bucket) {
-  console.warn("AWS_REGION or S3_BUCKET not set in env — set them before using s3 helpers.");
+function normalizeAws(creds = {}) {
+  return {
+    accessKeyId: creds.accessKeyId || "",
+    secretAccessKey: creds.secretAccessKey || "",
+    region: creds.region || "",
+    bucketName: creds.bucketName || "",
+  };
 }
 
-export const s3 = new S3Client({
-  region,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
+export async function resolveAwsConfig(tenant) {
+  const creds = await getCredentials({ tenant }, "aws");
+  const aws = normalizeAws(creds);
 
-/**
- * Create presigned PUT URL for direct browser upload.
- * returns { uploadUrl, key }
- */
+  if (
+    !aws.accessKeyId ||
+    !aws.secretAccessKey ||
+    !aws.region ||
+    !aws.bucketName
+  ) {
+    throw new Error("AWS credentials missing");
+  }
 
+  return aws;
+}
 
-export const createPresignedUpload = async ({ key, contentType, expiresSeconds = 900 }) => {
+function createS3Client(aws) {
+  return new S3Client({
+    region: aws.region,
+    credentials: {
+      accessKeyId: aws.accessKeyId,
+      secretAccessKey: aws.secretAccessKey,
+    },
+  });
+}
+
+export function publicUrlForKey({ bucketName, region, key }) {
+  if (!bucketName || !region || !key) {
+    throw new Error("bucketName, region and key are required");
+  }
+
+  const encodedKey = String(key)
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+
+  return `https://${bucketName}.s3.${region}.amazonaws.com/${encodedKey}`;
+}
+
+export async function createPresignedUpload({
+  tenant,
+  key,
+  contentType,
+  expiresSeconds = 900,
+}) {
+  if (!key) throw new Error("key is required");
+  if (!contentType) throw new Error("contentType is required");
+
+  const aws = await resolveAwsConfig(tenant);
+  const s3 = createS3Client(aws);
+
   const cmd = new PutObjectCommand({
-    Bucket: bucket,
+    Bucket: aws.bucketName,
     Key: key,
     ContentType: contentType,
-    // If you want public objects at upload time, you could add ACL: "public-read" (not recommended for private content)
   });
+
   const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: expiresSeconds });
-  return { uploadUrl, key, expiresIn: expiresSeconds };
-};
 
-/**
- * Create signed GET URL for previewing a private object.
- * returns signed GET url string.
- */
-export const createSignedGetUrl = async ({ key, expiresSeconds = 900 }) => {
-  const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+  return {
+    uploadUrl,
+    key,
+    expiresIn: expiresSeconds,
+    bucketName: aws.bucketName,
+    region: aws.region,
+  };
+}
+
+export async function createSignedGetUrl({
+  tenant,
+  key,
+  expiresSeconds = 900,
+}) {
+  if (!key) throw new Error("key is required");
+
+  const aws = await resolveAwsConfig(tenant);
+  const s3 = createS3Client(aws);
+
+  const cmd = new GetObjectCommand({
+    Bucket: aws.bucketName,
+    Key: key,
+  });
+
   return await getSignedUrl(s3, cmd, { expiresIn: expiresSeconds });
-};
+}
 
-/**
- * Public URL for object when bucket/object is publicly readable (or accessed via CloudFront)
- */
-export const publicUrlForKey = ({ key }) => {
-  return `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${encodeURIComponent(key)}`;
-};
-
-
-export const deleteFromStorage = async (key) => {
+export async function deleteFromStorage({ tenant, key }) {
   if (!key) return false;
 
+  const aws = await resolveAwsConfig(tenant);
+  const s3 = createS3Client(aws);
+
   const cmd = new DeleteObjectCommand({
-    Bucket: bucket,
+    Bucket: aws.bucketName,
     Key: key,
   });
 
@@ -66,4 +120,4 @@ export const deleteFromStorage = async (key) => {
     console.error("S3 delete failed:", err);
     throw new Error("Failed to delete file from storage");
   }
-};
+}

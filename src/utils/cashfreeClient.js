@@ -1,99 +1,150 @@
-// helpers/cashfree.js
+// utils/cashfreeClient.js
+
 import axios from "axios";
 import fs from "fs";
 import crypto from "crypto";
 import FormDataPkg from "form-data";
+import { getCredentials } from "../services/credentialResolver.js";
 
-// Ensure we ALWAYS use the Node 'form-data' implementation (avoid global FormData collision)
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
 
-const env = (process.env.CASHFREE_ENV || "").toLowerCase().trim();
+/* =========================
+   Helpers
+========================= */
 
-let PAYOUT_BASE = "https://api.cashfree.com";
-let VERIF_BASE = "https://api.cashfree.com/verification";
-
-if (env === "sandbox" || env === "test") {
-  PAYOUT_BASE = "https://sandbox.cashfree.com";
-  VERIF_BASE = "https://sandbox.cashfree.com/verification";
+function normalizeEnv(env) {
+  return (env || "").toLowerCase().trim();
 }
 
-function makeSignature() {
-  if (env !== "production" || !process.env.CASHFREE_PUBLIC_KEY_PATH)
+function getVerifBase(env) {
+  const normalized = normalizeEnv(env);
+
+  if (normalized === "sandbox" || normalized === "test") {
+    return "https://sandbox.cashfree.com/verification";
+  }
+
+  return "https://api.cashfree.com/verification";
+}
+
+/* =========================
+   Resolve Cashfree (STRICT SaaS)
+========================= */
+
+async function resolveCashfree(tenant) {
+  const creds = await getCredentials({ tenant }, "cashfree");
+
+  // 🔒 NO FALLBACK HERE
+  if (!creds?.clientId || !creds?.clientSecret) {
+    throw new Error("Cashfree credentials missing for tenant");
+  }
+
+  return {
+    clientId: creds.clientId,
+    clientSecret: creds.clientSecret,
+    env: creds.env || "production",
+    publicKeyPath: creds.publicKeyPath,
+  };
+}
+
+/* =========================
+   Signature (Prod only)
+========================= */
+
+function makeSignature(creds) {
+  const env = normalizeEnv(creds.env);
+
+  if (
+    env !== "production" ||
+    !creds.publicKeyPath ||
+    !fs.existsSync(creds.publicKeyPath)
+  ) {
     return null;
+  }
+
   const ts = Math.floor(Date.now() / 1000);
-  const payload = `${process.env.CASHFREE_CLIENT_ID}.${ts}`;
-  const pubKey = fs.readFileSync(process.env.CASHFREE_PUBLIC_KEY_PATH, "utf8");
+  const payload = `${creds.clientId}.${ts}`;
+  const pubKey = fs.readFileSync(creds.publicKeyPath, "utf8");
+
   const encrypted = crypto.publicEncrypt(
     { key: pubKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING },
-    Buffer.from(payload, "utf8"),
+    Buffer.from(payload, "utf8")
   );
+
   return encrypted.toString("base64");
 }
 
-function baseHeaders() {
-  // important: do NOT set Content-Type here
-  const h = {
-    "x-client-id": process.env.CASHFREE_CLIENT_ID,
-    "x-client-secret": process.env.CASHFREE_CLIENT_SECRET,
-    "x-api-version": "2024-12-01",
-  };
-  const sig = makeSignature();
-  if (sig) h["X-Cf-Signature"] = sig;
-  return h;
-}
+/* =========================
+   Base Headers
+========================= */
 
-console.log("ENV:", process.env.CASHFREE_ENV);
-console.log("VERIF_BASE:", VERIF_BASE);
-console.log("SECRET:", process.env.CASHFREE_CLIENT_SECRET?.slice(0, 12));
-
-export async function cfPost(path, body) {
-  const url = `${VERIF_BASE}${path}`;
+async function baseHeaders(tenant) {
+  const creds = await resolveCashfree(tenant);
 
   const headers = {
-    ...baseHeaders(),
-    "Content-Type": "application/json",
+    "x-client-id": creds.clientId,
+    "x-client-secret": creds.clientSecret,
+    "x-api-version": "2024-12-01",
   };
+
+  const sig = makeSignature(creds);
+  if (sig) headers["X-Cf-Signature"] = sig;
+
+  return { headers, creds };
+}
+
+/* =========================
+   POST JSON
+========================= */
+
+export async function cfPost(tenant, path, body) {
+  const { headers, creds } = await baseHeaders(tenant);
+  const url = `${getVerifBase(creds.env)}${path}`;
 
   try {
     const res = await axios.post(url, body, {
-      headers,
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
       timeout: 20000,
     });
 
     return res.data;
   } catch (err) {
-    console.log("CF GST ERROR FULL:", err?.response?.data || err.message);
+    console.log("CF ERROR FULL:", err?.response?.data || err.message);
 
-    // ✅ PASS EXACT ERROR UP
     const e = new Error(
       err?.response?.data?.message ||
         err?.response?.data?.error ||
         err?.message ||
-        "Cashfree request failed",
+        "Cashfree request failed"
     );
 
-    e.response = err.response; // ✅ VERY IMPORTANT
+    e.response = err.response;
     throw e;
   }
 }
 
-export async function cfMultipartPost(path, formOrObject) {
-  const url = `${VERIF_BASE}${path}`;
+/* =========================
+   POST MULTIPART
+========================= */
+
+export async function cfMultipartPost(tenant, path, formOrObject) {
+  const { headers, creds } = await baseHeaders(tenant);
+  const url = `${getVerifBase(creds.env)}${path}`;
 
   let form;
+
   if (formOrObject && typeof formOrObject.getHeaders === "function") {
-    // already a node-form-data instance
     form = formOrObject;
   } else {
-    // convert plain object -> FormDataNode and ensure Buffers/Streams are appended correctly
     form = new FormDataNode();
+
     for (const key of Object.keys(formOrObject || {})) {
       const val = formOrObject[key];
 
-      // if value is Buffer or Stream, append appropriately
       if (Buffer.isBuffer(val) || val?.pipe) {
-        // if val has filename metadata (object with buffer + filename) handle that
         if (
           val &&
           typeof val === "object" &&
@@ -110,51 +161,60 @@ export async function cfMultipartPost(path, formOrObject) {
             val,
             typeof val === "object" && val.filename
               ? { filename: val.filename }
-              : undefined,
+              : undefined
           );
         }
       } else {
-        // string/number/boolean -> convert to string
         form.append(key, val === undefined || val === null ? "" : String(val));
       }
     }
   }
 
-  const headers = {
-    ...baseHeaders(),
-    ...form.getHeaders(), // contains Content-Type: multipart/form-data; boundary=...
-  };
-
   try {
     const res = await axios.post(url, form, {
-      headers,
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
       timeout: 20000,
       maxBodyLength: Infinity,
     });
+
     return res.data;
   } catch (err) {
-    // surface useful error for debugging
-    const remote = err.response?.data || err.message;
-    // rethrow with the remote data attached so caller can inspect
-    const e = new Error("Cashfree multipart error: " + JSON.stringify(remote));
+    const remote = err?.response?.data || err?.message;
+
+    const e = new Error(
+      "Cashfree multipart error: " +
+        (typeof remote === "string" ? remote : JSON.stringify(remote))
+    );
+
     e.remote = remote;
     throw e;
   }
 }
 
-export async function cfGetFull(url, params = {}) {
+/* =========================
+   GET
+========================= */
+
+export async function cfGetFull(tenant, url, params = {}) {
+  const { headers } = await baseHeaders(tenant);
+
   const res = await axios.get(url, {
-    headers: baseHeaders(),
+    headers,
     params,
     timeout: 20000,
   });
 
-  console.log("ENV:", process.env.CASHFREE_ENV);
-  console.log("URL:", url);
-  console.log("CLIENT:", process.env.CASHFREE_CLIENT_ID);
   return res.data;
 }
 
-export function payoutBankSyncUrl() {
-  return `${VERIF_BASE}/bank-account/sync`;
+/* =========================
+   Helper URL
+========================= */
+
+export async function payoutBankSyncUrl(tenant) {
+  const { creds } = await baseHeaders(tenant);
+  return `${getVerifBase(creds.env)}/bank-account/sync`;
 }

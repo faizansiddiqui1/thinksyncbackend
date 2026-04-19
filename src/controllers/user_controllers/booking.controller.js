@@ -2,7 +2,6 @@ import * as bookingService from "../../services/booking.service.js";
 import { validationResult } from "express-validator";
 
 import crypto from "crypto";
-import Booking from "../../models/user_models/Booking.js";
 import TempBooking from "../../models/user_models/TempBooking.js";
 import { getTenantIdFromSpace } from "../../utils/getTenantIdFromSpace.js";
 import { resolveGateway } from "../../services/paymentGatewayResolver.service.js";
@@ -117,6 +116,8 @@ export const verifyRazorpayPayment = async (req, res) => {
     });
   }
 };
+
+
 
 
 export const getOwnerBookings = async (req, res) => {

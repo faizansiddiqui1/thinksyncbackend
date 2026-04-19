@@ -1,23 +1,27 @@
-// services/smsService.js
 import axios from "axios";
+import { getCredentials } from "./credentialResolver.js";
 
-const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
-const MSG91_COUNTRY = process.env.MSG91_COUNTRY;
-const MSG91_OTP_TEMPLATE_ID = process.env.MSG91_OTP_TEMPLATE_ID;
-
-export const sendSMS = async (phone, otp) => {
+export const sendSMS = async (phone, otp, { tenant } = {}) => {
   if (!phone) {
     throw new Error("Phone number missing");
   }
 
+  const creds = await getCredentials({ tenant }, "msg91");
+
+  if (!creds?.authKey || !creds?.templateId) {
+    throw new Error("MSG91 credentials missing");
+  }
+
+  const country = creds.country || "91";
+
   const payload = {
-    template_id: MSG91_OTP_TEMPLATE_ID,
-    mobile: `${MSG91_COUNTRY}${phone}`, // add country code ONLY here
+    template_id: creds.templateId,
+    mobile: `${country}${phone}`,
     otp: String(otp),
   };
 
   const headers = {
-    authkey: MSG91_AUTH_KEY,
+    authkey: creds.authKey,
     "Content-Type": "application/json",
   };
 

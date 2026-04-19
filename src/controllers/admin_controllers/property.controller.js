@@ -1,4 +1,3 @@
-// controllers/property.controller.js
 import { reverseGeocode } from "../../services/geocode.service.js";
 import {
   getPlaceAutocomplete,
@@ -6,11 +5,25 @@ import {
 } from "../../services/places.service.js";
 
 /* =========================
+   Helpers
+========================= */
+
+function getContext(req) {
+  return req.context || {};
+}
+
+function getTenant(req) {
+  return getContext(req).tenant || null;
+}
+
+/* =========================
    Reverse Location
 ========================= */
+
 export const reverseLocationController = async (req, res) => {
   try {
     const { lat, lng } = req.body;
+    const tenant = getTenant(req);
 
     if (lat === undefined || lng === undefined) {
       return res.status(400).json({ message: "lat & lng required" });
@@ -23,10 +36,11 @@ export const reverseLocationController = async (req, res) => {
       return res.status(400).json({ message: "lat & lng must be numbers" });
     }
 
-    const structured = await reverseGeocode(latNum, lngNum);
+    // ✅ tenant pass kiya
+    const structured = await reverseGeocode(latNum, lngNum, { tenant });
 
     return res.json({
-      ...structured, // street, city, state, pincode, country, formatted_address, address_components
+      ...structured,
       lat: latNum,
       lng: lngNum,
     });
@@ -38,8 +52,11 @@ export const reverseLocationController = async (req, res) => {
 /* =========================
    Autocomplete
 ========================= */
+
 export const autocompleteController = async (req, res) => {
   try {
+    const tenant = getTenant(req);
+
     const input = String(req.query.input || "").trim();
     const sessiontoken = req.query.sessiontoken || undefined;
 
@@ -47,7 +64,8 @@ export const autocompleteController = async (req, res) => {
       return res.status(400).json({ message: "input required" });
     }
 
-    const data = await getPlaceAutocomplete(input, sessiontoken);
+    // ✅ tenant pass kiya
+    const data = await getPlaceAutocomplete(input, sessiontoken, { tenant });
 
     const predictions = (data.predictions || []).map((p) => ({
       description: p.description,
@@ -67,9 +85,11 @@ export const autocompleteController = async (req, res) => {
 /* =========================
    Place Details
 ========================= */
-// controllers/property.controller.js (replace placeDetailsController)
+
 export const placeDetailsController = async (req, res) => {
   try {
+    const tenant = getTenant(req);
+
     const place_id = String(req.query.place_id || "").trim();
     const sessiontoken = req.query.sessiontoken || undefined;
 
@@ -77,28 +97,38 @@ export const placeDetailsController = async (req, res) => {
       return res.status(400).json({ message: "place_id required" });
     }
 
-    const data = await getPlaceDetails(place_id, sessiontoken);
+    // ✅ tenant pass kiya
+    const data = await getPlaceDetails(place_id, sessiontoken, { tenant });
+
     const result = data.result || {};
     const location = result.geometry?.location || null;
 
-    // If we have lat/lng, call reverseGeocode to get structured address components
     let structured = {};
+
+    // ✅ reverseGeocode mein bhi tenant pass
     if (location?.lat && location?.lng) {
-      structured = await reverseGeocode(location.lat, location.lng); // now returns object with street, city, state...
+      structured = await reverseGeocode(location.lat, location.lng, {
+        tenant,
+      });
     }
 
     return res.json({
       status: data.status || "UNKNOWN",
-      // include both the formatted address from Places and the structured components
-      address: result.formatted_address || structured.formatted_address || "",
+
+      address:
+        result.formatted_address ||
+        structured.formatted_address ||
+        "",
+
       street: structured.street || "",
       city: structured.city || "",
       state: structured.state || "",
       pincode: structured.pincode || "",
       country: structured.country || "",
+
       lat: location?.lat ?? null,
       lng: location?.lng ?? null,
-      // optionally return raw address_components if needed
+
       address_components: structured.address_components || [],
     });
   } catch (err) {

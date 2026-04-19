@@ -23,12 +23,18 @@ function normalizeConfig(cfg = {}) {
   };
 }
 
+function getContext(req) {
+  return req.context || {};
+}
+
+function getTenant(req) {
+  return getContext(req).tenant || null;
+}
+
 async function getGlobalKycConfig() {
   const global = await AdminProfile.findOne({
     "company.name": "GLOBAL_DEFAULT",
   }).lean();
-
-  // console.log("GLOBAL DOC:", global); // DEBUG
 
   if (!global?.kyc?.config) {
     console.log("⚠️ Global config missing");
@@ -64,13 +70,11 @@ export async function getAdminKycStatusHandler(req, res) {
 
     const decision = getAdminKycDecision(cv, config, user);
 
-    // ✅🔥 MAIN FIX (role sync)
     if (decision === "approved" && user.role !== "admin") {
       user.role = "admin";
       user.kyc.status = "approved";
       await user.save();
 
-      // fresh role send karne ke liye update
       user = user.toObject();
       user.role = "admin";
     }
@@ -79,7 +83,7 @@ export async function getAdminKycStatusHandler(req, res) {
 
     return res.json({
       success: true,
-      role: user.role, // ✅ ab correct aayega
+      role: user.role,
       customRoles: user.customRoles || [],
       status: decision,
       config,
@@ -95,35 +99,35 @@ export async function getAdminKycStatusHandler(req, res) {
   }
 }
 
-// ===================================================
-// get Admin KYC status
-// ===================================================
 export function getAdminKycDecision(companyVerification, config = {}, user) {
   if (!companyVerification) return "pending";
 
   const checks = [];
 
-  if (config.requirePan)
+  if (config.requirePan) {
     checks.push(companyVerification?.pan?.status === "verified");
+  }
 
-  // company pan (new)
-  if (config.requireCompanyPan)
+  if (config.requireCompanyPan) {
     checks.push(companyVerification?.companyPan?.status === "verified");
+  }
 
-  // Aadhaar presence/verification
-  if (config.requireAadhaar || config.requireFaceMatch)
+  if (config.requireAadhaar || config.requireFaceMatch) {
     checks.push(companyVerification?.aadhaar?.status === "verified");
+  }
 
-  if (config.requireBankCheack)
+  if (config.requireBankCheack) {
     checks.push(companyVerification?.bank?.status === "verified");
+  }
 
-  if (config.requireGstin)
+  if (config.requireGstin) {
     checks.push(companyVerification?.gst?.status === "verified");
+  }
 
-  if (config.requireCin)
+  if (config.requireCin) {
     checks.push(companyVerification?.cin?.status === "verified");
+  }
 
-  // if any explicit check is false -> pending
   if (checks.includes(false)) return "pending";
 
   return "approved";
@@ -138,9 +142,7 @@ export async function updateAdminKyc(userId) {
   const rawConfig = await getGlobalKycConfig();
   const config = normalizeConfig(rawConfig);
 
-  // fetch user so faceMatch check can run
   const user = await User.findById(userId).lean();
-
   const decision = getAdminKycDecision(cv, config, user);
 
   adminProfile.kyc.status = decision;
@@ -154,6 +156,7 @@ export async function updateAdminKyc(userId) {
     await u.save();
   }
 }
+
 /** get or create verification row */
 export async function getOrCreate(userId) {
   let v = await CompanyVerification.findOne({ userId });
@@ -161,7 +164,6 @@ export async function getOrCreate(userId) {
   return v;
 }
 
-// is already verifed ?
 export function isAlreadyVerified(doc, newValue, keyName = "number") {
   if (!doc) return false;
 
@@ -177,27 +179,30 @@ export function isAlreadyVerified(doc, newValue, keyName = "number") {
   return false;
 }
 
-/** PAN */
 export async function verifyPanHandler(req, res, next) {
   try {
     const userId = req.user._id;
+    const tenant = getTenant(req);
     const { pan, name } = req.body;
 
     if (!pan) throw new ApiError(400, "PAN is required");
 
     const v = await getOrCreate(userId);
 
-    // ✅ CHECK BEFORE API CALL
     if (v.pan?.status === "verified" && v.pan?.data?.pan === pan) {
       return res.json({
         success: true,
         message: "Your PAN already verified",
         verified: true,
-        status: v.pan.status, // we don't want to send full data
+        status: v.pan.status,
       });
     }
 
-    const { raw, verified } = await svc.verifyPan(pan, name);
+    const { raw, verified } = await svc.verifyPan({
+      tenant,
+      pan,
+      name,
+    });
 
     ensureField(v, "pan");
     v.pan.status = verified ? "verified" : "rejected";
@@ -205,7 +210,6 @@ export async function verifyPanHandler(req, res, next) {
 
     await v.save();
 
-    //
     const user = await User.findById(userId);
     if (user) {
       if (!user.kyc) user.kyc = {};
@@ -216,15 +220,12 @@ export async function verifyPanHandler(req, res, next) {
         uploadedAt: new Date(),
       };
 
-      user.kyc.status = await svc.getFinalKycStatus(user); // or set from buildUserKycPayload
+      user.kyc.status = await svc.getFinalKycStatus(user);
       await user.save();
     }
 
-    //
-
     await updateAdminKyc(userId);
 
-    // ✅ FIX HERE
     if (!verified) {
       return res.status(400).json({
         success: false,
@@ -243,26 +244,22 @@ export async function verifyPanHandler(req, res, next) {
   }
 }
 
-// Company pan
+/** Company PAN */
 export async function verifyCompanyPanHandler(req, res, next) {
   try {
     const userId = req.user._id;
+    const tenant = getTenant(req);
     const { pan, name } = req.body;
 
     if (!pan) throw new ApiError(400, "Company PAN required");
 
     const v = await getOrCreate(userId);
-
-    // Normalize input
     const panInput = String(pan).trim().toUpperCase();
 
-    // Duplicate check: check v.companyPan first, then fallback to v.pan (legacy)
     const existingCompanyPan =
       v.companyPan?.status === "verified"
         ? v.companyPan?.data?.pan || v.companyPan?.data
         : null;
-    const existingPersonalPan =
-      v.pan?.status === "verified" ? v.pan?.data?.pan || v.pan?.data : null;
 
     if (
       existingCompanyPan &&
@@ -275,7 +272,11 @@ export async function verifyCompanyPanHandler(req, res, next) {
       });
     }
 
-    const { raw, verified } = await svc.verifyCompanyPan(panInput, name);
+    const { raw, verified } = await svc.verifyCompanyPan({
+      tenant,
+      pan: panInput,
+      name,
+    });
 
     ensureField(v, "companyPan");
     v.companyPan.status = verified ? "verified" : "rejected";
@@ -299,6 +300,7 @@ export async function verifyCompanyPanHandler(req, res, next) {
 export async function verifyGstHandler(req, res, next) {
   try {
     const userId = req.user._id;
+    const tenant = getTenant(req);
     const { gstin } = req.body;
 
     if (!gstin) throw new ApiError(400, "GSTIN is required");
@@ -314,7 +316,10 @@ export async function verifyGstHandler(req, res, next) {
       });
     }
 
-    const { raw, verified } = await svc.verifyGstin(gstin);
+    const { raw, verified } = await svc.verifyGstin({
+      tenant,
+      gstin,
+    });
 
     ensureField(v, "gst");
     v.gst.status = verified ? "verified" : "rejected";
@@ -323,7 +328,6 @@ export async function verifyGstHandler(req, res, next) {
     await v.save();
     await updateAdminKyc(userId);
 
-    // ✅ FIX — wrong GST pe error bhejo
     if (!verified) {
       return res.status(400).json({
         success: false,
@@ -346,6 +350,7 @@ export async function verifyGstHandler(req, res, next) {
 export async function verifyCinHandler(req, res, next) {
   try {
     const userId = req.user._id;
+    const tenant = getTenant(req);
     const { cin } = req.body;
 
     if (!cin) throw new ApiError(400, "CIN is required");
@@ -360,7 +365,11 @@ export async function verifyCinHandler(req, res, next) {
         data: v.cin.status,
       });
     }
-    const { raw, verified } = await svc.verifyCin(cin);
+
+    const { raw, verified } = await svc.verifyCin({
+      tenant,
+      cin,
+    });
 
     ensureField(v, "cin");
     v.cin.status = verified ? "verified" : "rejected";
@@ -369,7 +378,6 @@ export async function verifyCinHandler(req, res, next) {
     await v.save();
     await updateAdminKyc(userId);
 
-    // ✅ MAIN FIX
     if (!verified) {
       return res.status(400).json({
         success: false,
@@ -392,6 +400,7 @@ export async function verifyCinHandler(req, res, next) {
 export async function verifyAadhaarOCRHandler(req, res, next) {
   try {
     const userId = req.user && req.user._id;
+    const tenant = getTenant(req);
     const file = req.file;
     const fileUrl = req.body.fileUrl || req.body.file_url;
 
@@ -410,9 +419,9 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
         mimetype: file.mimetype,
       };
 
-      ({ raw, verified } = await svc.verifyAadhaarOCR(input));
+      ({ raw, verified } = await svc.verifyAadhaarOCR(input, { tenant }));
     } else {
-      ({ raw, verified } = await svc.verifyAadhaarOCR(fileUrl));
+      ({ raw, verified } = await svc.verifyAadhaarOCR(fileUrl, { tenant }));
     }
 
     ensureField(v, "aadhaar");
@@ -420,7 +429,6 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
     v.aadhaar.data = raw;
 
     await v.save();
-
     await updateAdminKyc(userId);
 
     return res.json({
@@ -438,14 +446,15 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
 export async function verifyBankSyncHandler(req, res, next) {
   try {
     const userId = req.user._id;
+    const tenant = getTenant(req);
     const { bank_account, ifsc } = req.body;
 
-    if (!bank_account || !ifsc)
+    if (!bank_account || !ifsc) {
       throw new ApiError(400, "bank_account number and IFSC required");
+    }
 
     const v = await getOrCreate(userId);
 
-    // ✅ DUPLICATE CHECK (correct now)
     if (
       v.bank?.status === "verified" &&
       v.bank?.account === bank_account &&
@@ -459,12 +468,13 @@ export async function verifyBankSyncHandler(req, res, next) {
       });
     }
 
-    // 🔵 CALL PROVIDER
-    const { raw, verified } = await svc.verifyBankSync(bank_account, ifsc);
+    const { raw, verified } = await svc.verifyBankSync({
+      tenant,
+      account: bank_account,
+      ifsc,
+    });
 
     ensureField(v, "bank");
-
-    // ✅ SAVE WITH OWN FIELDS
     v.bank.status = verified ? "verified" : "rejected";
     v.bank.account = bank_account;
     v.bank.ifsc = ifsc;
@@ -488,7 +498,8 @@ export async function verifyBankSyncHandler(req, res, next) {
 
 export const getPresignForKycImage = async (req, res) => {
   try {
-    const data = await svc.getPresignForKycImage(req.user.id, req.body);
+    const data = await svc.getPresignForKycImage(req.user._id, req.body);
+
     res.json({ success: true, data });
   } catch (e) {
     res.status(400).json({ success: false, message: e.message });
@@ -497,10 +508,16 @@ export const getPresignForKycImage = async (req, res) => {
 
 export const saveKycImage = async (req, res) => {
   try {
-    const data = await svc.saveKycImage(req.user.id, {
-      key: req.body.key,
-      type: req.body.type,
-    });
+    const tenant = getTenant(req);
+
+    const data = await svc.saveKycImage(
+      req.user._id,
+      {
+        key: req.body.key,
+        type: req.body.type,
+      },
+      tenant,
+    );
 
     res.json({ success: true, message: "Image saved", data });
   } catch (e) {

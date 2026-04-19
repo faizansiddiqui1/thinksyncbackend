@@ -1,29 +1,44 @@
-// services/resourceService.js
-import { createPresignedUpload } from "../config/s3.js";
+import mime from "mime-types";
 import Resource from "../models/admin_models/ResourceSchema.js";
 import Space from "../models/admin_models/Space.js";
+import {
+  createPresignedUpload,
+  createSignedGetUrl,
+  deleteFromStorage,
+  publicUrlForKey,
+  resolveAwsConfig,
+} from "../config/s3.js";
 
-import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
-
-const s3 = new S3Client({
-  region: process.env.AWS_REGION,
-});
-
-
-export async function createResourceForSpace(spaceId, data) {
-  // ensure space exists (simple guard)
+const ensureSpaceExists = async (spaceId) => {
   const space = await Space.findById(spaceId).select("_id");
   if (!space) {
     const err = new Error("Space not found");
     err.status = 404;
     throw err;
   }
+  return space;
+};
+
+const ensureResourceExists = async (resourceId) => {
+  const resource = await Resource.findById(resourceId).select("_id images space");
+  if (!resource) {
+    const err = new Error("Resource not found");
+    err.status = 404;
+    throw err;
+  }
+  return resource;
+};
+
+const getImageUrl = ({ bucketName, region, key }) =>
+  publicUrlForKey({ bucketName, region, key });
+
+export async function createResourceForSpace(spaceId, data, tenant = null) {
+  await ensureSpaceExists(spaceId);
 
   const payload = { ...data, space: spaceId };
   const resource = await Resource.create(payload);
   return resource;
 }
-
 
 export async function getAllResources() {
   return Resource.find({})
@@ -35,28 +50,25 @@ export async function getAllResources() {
 export const addResourceImage = async (
   resourceId,
   imageData,
-  userId = null
+  userId = null,
+  tenant = null,
 ) => {
-  const resource = await Resource.findById(resourceId);
-
-  if (!resource) {
-    throw new Error("Resource not found");
-  }
+  const resource = await ensureResourceExists(resourceId);
 
   if (!imageData?.key) {
     throw new Error("Image key is required");
   }
 
-  const bucket = process.env.AWS_BUCKET_NAME;
-  const region = process.env.AWS_REGION;
+  const aws = await resolveAwsConfig(tenant);
+  const url = getImageUrl({
+    bucketName: aws.bucketName,
+    region: aws.region,
+    key: imageData.key,
+  });
 
-  // same url pattern as space images
-  const url = `https://${bucket}.s3.${region}.amazonaws.com/${imageData.key}`;
-
-  // calculate next order
-  const maxOrder = resource.images.reduce(
+  const maxOrder = (resource.images || []).reduce(
     (max, img) => Math.max(max, img.order || 0),
-    0
+    0,
   );
 
   const imageToSave = {
@@ -71,32 +83,20 @@ export const addResourceImage = async (
   resource.images.push(imageToSave);
 
   if (userId) resource.updatedBy = userId;
-
   await resource.save();
 
   return imageToSave;
 };
 
-
-/**
- * Delete single image from resource
- */
-export async function deleteResourceImage(resourceId, imageId) {
+export async function deleteResourceImage(resourceId, imageId, tenant = null) {
   if (!resourceId || !imageId) {
     const err = new Error("resourceId and imageId are required");
     err.status = 400;
     throw err;
   }
 
-  const resource = await Resource.findById(resourceId);
+  const resource = await ensureResourceExists(resourceId);
 
-  if (!resource) {
-    const err = new Error("Resource not found");
-    err.status = 404;
-    throw err;
-  }
-
-  // find image inside images array
   const image = resource.images.id(imageId);
 
   if (!image) {
@@ -105,34 +105,25 @@ export async function deleteResourceImage(resourceId, imageId) {
     throw err;
   }
 
-  // 1️⃣ delete from S3 (if key exists)
   if (image.s3Key) {
     try {
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: process.env.AWS_BUCKET_NAME,
-          Key: image.s3Key,
-        })
-      );
+      await deleteFromStorage({ tenant, key: image.s3Key });
     } catch (s3Err) {
       console.error("S3 delete failed:", s3Err);
-      // don't block DB deletion if S3 fails
     }
   }
 
-  // 2️⃣ remove from DB
-  image.deleteOne(); // mongoose subdocument delete
+  image.deleteOne();
   await resource.save();
 
   return { imageId };
 }
 
-
 export async function getResourcesBySpace(spaceId, opts = {}) {
   const query = { space: spaceId };
   if (opts.activeOnly) query.isActive = true;
 
-  const q = Resource.find(query);
+  const q = Resource.find(query).populate("space", "name slug");
   if (opts.select) q.select(opts.select);
   if (opts.sort) q.sort(opts.sort);
   if (opts.limit) q.limit(opts.limit);
@@ -151,7 +142,7 @@ export async function getResourceById(resourceId) {
   return r;
 }
 
-export async function updateResource(resourceId, updates) {
+export async function updateResource(resourceId, updates, tenant = null) {
   const resource = await Resource.findById(resourceId);
   if (!resource) {
     const err = new Error("Resource not found");
@@ -165,28 +156,44 @@ export async function updateResource(resourceId, updates) {
   return resource;
 }
 
-export async function deleteResource(resourceId) {
-  const resource = await Resource.findByIdAndDelete(resourceId);
+export async function deleteResource(resourceId, tenant = null) {
+  const resource = await Resource.findById(resourceId);
   if (!resource) {
     const err = new Error("Resource not found");
     err.status = 404;
     throw err;
   }
+
+  const imageKeys = (resource.images || [])
+    .map((img) => img?.s3Key)
+    .filter(Boolean);
+
+  await Promise.allSettled(
+    imageKeys.map((key) => deleteFromStorage({ tenant, key })),
+  );
+
+  await Resource.deleteOne({ _id: resourceId });
+
   return resource;
 }
 
+/**
+ * Optional helper if you later add a presign route for resource images.
+ * Upload path: resources/:resourceId/images/...
+ */
 export const getPresignForImage = async (
-  spaceId,
+  resourceId,
   filename,
   contentType,
   userId = null,
+  tenant = null,
 ) => {
-  await ensureSpaceExists(spaceId);
-
-  if (!filename || !contentType)
+  if (!filename || !contentType) {
     throw new Error("filename and contentType are required");
+  }
 
-  // derive extension if missing
+  await ensureResourceExists(resourceId);
+
   let ext = "";
   if (filename.includes(".")) {
     ext = filename.substring(filename.lastIndexOf("."));
@@ -195,23 +202,26 @@ export const getPresignForImage = async (
   }
 
   const random = Math.random().toString(36).slice(2, 8);
-  const key = `spaces/${spaceId}/${Date.now()}_${random}${ext}`;
+  const key = `resources/${resourceId}/images/${Date.now()}_${random}${ext}`;
 
-  const { uploadUrl, expiresIn } = await createPresignedUpload({
-    key,
-    contentType,
-    expiresSeconds: 900,
-  });
+  const { uploadUrl, expiresIn, bucketName, region } =
+    await createPresignedUpload({
+      tenant,
+      key,
+      contentType,
+      expiresSeconds: 900,
+    });
 
   if (process.env.S3_PUBLIC === "true") {
-    const url = publicUrlForKey({ key });
+    const url = publicUrlForKey({ bucketName, region, key });
     return { uploadUrl, key, url, expiresIn };
-  } else {
-    // Private bucket -> return signed GET for immediate preview if desired
-    const previewUrl = await createSignedGetUrl({
-      key,
-      expiresSeconds: 900,
-    }).catch(() => null);
-    return { uploadUrl, key, previewUrl, expiresIn };
   }
+
+  const previewUrl = await createSignedGetUrl({
+    tenant,
+    key,
+    expiresSeconds: 900,
+  }).catch(() => null);
+
+  return { uploadUrl, key, previewUrl, expiresIn };
 };

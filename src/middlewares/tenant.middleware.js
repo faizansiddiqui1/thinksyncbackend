@@ -1,102 +1,157 @@
 import Tenant from "../models/admin_models/tenant.model.js";
 
-/**
- * In-memory cache (can replace with Redis later)
- */
+/* =========================
+   CACHE (in-memory)
+========================= */
+
 const tenantCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 min
 
-/**
- * Cache TTL (optional - 5 minutes)
- */
-const CACHE_TTL = 5 * 60 * 1000;
+/* =========================
+   CONFIG
+========================= */
 
-/**
- * Paths that DO NOT require tenant
- */
 const SKIP_PATHS = ["/health"];
 
-/**
- * Check if route should skip tenant resolution
- */
+/* =========================
+   HELPERS
+========================= */
+
 function shouldSkip(path) {
   return SKIP_PATHS.some((p) => path.startsWith(p));
 }
 
-/**
- * Get tenant from cache
- */
-function getCachedTenant(host) {
-  const cached = tenantCache.get(host);
+// ✅ normalize domain (remove port + www)
+function normalizeDomain(host) {
+  if (!host) return null;
+
+  let domain = host.split(":")[0].toLowerCase();
+
+  if (domain.startsWith("www.")) {
+    domain = domain.replace("www.", "");
+  }
+
+  return domain;
+}
+
+// ✅ extract subdomain (tenant1.app.com → tenant1)
+function extractSubdomain(domain) {
+  const parts = domain.split(".");
+
+  if (parts.length > 2) {
+    return parts[0];
+  }
+
+  return null;
+}
+
+/* =========================
+   CACHE HELPERS
+========================= */
+
+function getCachedTenant(key) {
+  const cached = tenantCache.get(key);
 
   if (!cached) return null;
 
-  // ⏱ TTL check
   if (Date.now() > cached.expiry) {
-    tenantCache.delete(host);
+    tenantCache.delete(key);
     return null;
   }
 
   return cached.data;
 }
 
-/**
- * Set tenant in cache
- */
-function setTenantCache(host, tenant) {
-  tenantCache.set(host, {
+function setTenantCache(key, tenant) {
+  tenantCache.set(key, {
     data: tenant,
     expiry: Date.now() + CACHE_TTL,
   });
 }
 
-/**
- * MAIN MIDDLEWARE
- */
+/* =========================
+   CONTEXT
+========================= */
+
+function buildContext(req) {
+  return {
+    tenant: req.tenant || null,
+    user: req.user || null,
+    requestId: req.headers["x-request-id"] || null,
+    ip: req.ip,
+  };
+}
+
+/* =========================
+   MAIN MIDDLEWARE
+========================= */
+
 export async function tenantMiddleware(req, res, next) {
   try {
-      console.log("RAW HOST:", req.headers.host);
-      
     const path = req.originalUrl;
 
+    // ✅ skip routes
     if (shouldSkip(path)) {
+      req.context = buildContext(req);
       return next();
     }
 
-    // 🔥 FIX HERE
-    const host = req.headers.host?.split(":")[0].toLowerCase();
+    const rawHost = req.headers.host;
 
-
-
-    console.log("HOST:", host);
-
-    if (!host) {
+    if (!rawHost) {
       return res.status(400).json({
         success: false,
         message: "Host header missing",
       });
     }
 
-    const cachedTenant = getCachedTenant(host);
+    const domain = normalizeDomain(rawHost);
 
-    if (cachedTenant) {
-      req.tenant = cachedTenant;
-      return next();
-    }
-
-    const tenant = await Tenant.findOne({ domain: host }).lean();
-
-    console.log("TENANT FOUND:", tenant);
-
-    if (!tenant) {
-      return res.status(404).json({
+    if (!domain) {
+      return res.status(400).json({
         success: false,
-        message: "Tenant not found",
+        message: "Invalid host",
       });
     }
 
-    setTenantCache(host, tenant);
+    let tenant = getCachedTenant(domain);
 
+    if (!tenant) {
+      // 🔥 1. try full domain (custom domain)
+      tenant = await Tenant.findOne({ domain }).lean();
+
+      // 🔥 2. try subdomain (tenant1.app.com)
+      if (!tenant) {
+        const subdomain = extractSubdomain(domain);
+
+        if (subdomain) {
+          tenant = await Tenant.findOne({ domain: subdomain }).lean();
+        }
+      }
+
+      if (!tenant) {
+        return res.status(404).json({
+          success: false,
+          message: "Tenant not found",
+        });
+      }
+
+      // ❌ suspended tenant block
+      if (tenant.status === "suspended") {
+        return res.status(403).json({
+          success: false,
+          message: "Tenant suspended",
+        });
+      }
+
+      setTenantCache(domain, tenant);
+    }
+
+    // ✅ attach tenant
     req.tenant = tenant;
+
+    // ✅ attach context
+    req.context = buildContext(req);
 
     next();
   } catch (error) {

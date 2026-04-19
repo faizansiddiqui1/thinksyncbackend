@@ -22,13 +22,18 @@ const TenantSecretsSchema = new Schema(
         default: "sandbox",
       },
     },
+    razorpay: {
+      keyId: String,
+      keySecret: String,
+      webhookSecret: String,
+    },
 
     // 🔹 SMTP
     smtp: {
       host: String,
       port: Number,
-      user: String,
-      pass: String,
+      username: String,
+      password: String,
       fromName: String,
       fromEmail: String,
     },
@@ -58,7 +63,7 @@ const TenantSecretsSchema = new Schema(
 
     updatedAt: Date,
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 export default mongoose.model("TenantSecrets", TenantSecretsSchema);

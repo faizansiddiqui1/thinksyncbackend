@@ -1,21 +1,36 @@
-// services/smtpService.js
-import SMTP from '../models/super_admin_models/SMTP.model.js';
+import { getCredentials } from "./credentialResolver.js";
 
-export const getActiveSMTPs = async () => {
-  const smtps = await SMTP.find({ isActive: true }).sort({ priority: 1 }).lean();
-  if (smtps.length) return smtps;
+function normalizePort(port) {
+  const n = Number(port);
+  return Number.isFinite(n) && n > 0 ? n : 587;
+}
 
-  if (process.env.DEFAULT_SMTP_HOST) {
-    return [{ 
-      host: process.env.DEFAULT_SMTP_HOST,
-      port: Number(process.env.DEFAULT_SMTP_PORT || 587),
-      secure: false,
-      username: process.env.DEFAULT_SMTP_USER,
-      password: process.env.DEFAULT_SMTP_PASS,
-      fromName: process.env.DEFAULT_FROM_NAME || 'Your App',
-      fromEmail: process.env.DEFAULT_FROM_EMAIL || process.env.DEFAULT_SMTP_USER
-    }];
+function normalizeSMTP(creds = {}) {
+  return {
+    host: creds.host || "",
+    port: normalizePort(creds.port),
+    secure:
+      typeof creds.secure === "boolean"
+        ? creds.secure
+        : normalizePort(creds.port) === 465,
+    username: creds.username || "",
+    password: creds.password || "",
+    fromName: creds.fromName || process.env.DEFAULT_FROM_NAME || "Your App",
+    fromEmail:
+      creds.fromEmail ||
+      process.env.DEFAULT_FROM_EMAIL ||
+      creds.username || "",
+  };
+}
+
+export const getActiveSMTP = async (tenant) => {
+  const creds = await getCredentials({ tenant }, "smtp");
+
+  const smtp = normalizeSMTP(creds);
+
+  if (!smtp.host || !smtp.username || !smtp.password) {
+    throw new Error("SMTP credentials missing");
   }
 
-  return [];
+  return smtp;
 };

@@ -9,7 +9,7 @@ export const sendNewDeviceLoginAlert = async ({
   await sendEmail({
     to: email,
     subject: "⚠️ New Device Login Detected",
-    html: `
+    html: ` 
       <h3>New device login detected</h3>
       <p><strong>IP:</strong> ${ip}</p>
       <p><strong>Device:</strong> ${userAgent}</p>

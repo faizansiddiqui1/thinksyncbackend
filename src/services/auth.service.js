@@ -1,4 +1,3 @@
-// services/authService.js
 import User from "../models/user_models/User.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -31,7 +30,7 @@ const resolveIdentifier = (identifier) => {
   return { isMail, email, phone };
 };
 
-const issueOtp = async (user, target, isMail) => {
+const issueOtp = async (user, target, isMail, tenant) => {
   if (user.isActive === false) {
     throw new Error("Account disabled");
   }
@@ -50,6 +49,7 @@ const issueOtp = async (user, target, isMail) => {
 
   if (isMail) {
     await sendEmail({
+      tenant,
       to: target,
       subject: "Your OTP Code",
       html: `
@@ -60,7 +60,7 @@ const issueOtp = async (user, target, isMail) => {
       `,
     });
   } else {
-    await sendSMS(target, otp);
+    await sendSMS(target, otp, { tenant });
   }
 
   return true;
@@ -87,11 +87,16 @@ const ensureAdminProfile = async (ownerId) => {
   if (existing) return existing;
   return AdminProfile.create({
     owner: ownerId,
-    kyc: { status: "not_submitted", submittedAt: new Date() }, // Changed to "not_submitted" for accuracy; "pending" after submission
+    kyc: { status: "not_submitted", submittedAt: new Date() },
   });
 };
 
-export const sendOtp = async ({ username, identifier, intent = "login" }) => {
+export const sendOtp = async ({
+  username,
+  identifier,
+  intent = "login",
+  tenant = null,
+}) => {
   const { isMail, email, phone } = resolveIdentifier(identifier);
   const normalizedUsername = normalizeUsername(username);
   const normalizedIntent = String(intent || "login")
@@ -104,8 +109,7 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
     if (!user) {
       throw new Error("Account not found. Please signup.");
     }
-    await issueOtp(user, isMail ? email : phone, isMail);
-
+    await issueOtp(user, isMail ? email : phone, isMail, tenant);
     return { role: user.role };
   }
 
@@ -126,7 +130,7 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
         : { username: normalizedUsername, phoneNumber: phone },
     );
 
-    return issueOtp(newUser, isMail ? email : phone, isMail);
+    return issueOtp(newUser, isMail ? email : phone, isMail, tenant);
   }
 
   if (normalizedIntent === "admin") {
@@ -140,18 +144,18 @@ export const sendOtp = async ({ username, identifier, intent = "login" }) => {
       throw new Error("You are not authorized for admin login");
     }
 
-    return issueOtp(user, isMail ? email : phone, isMail);
+    return issueOtp(user, isMail ? email : phone, isMail, tenant);
   }
 
   throw new Error("Invalid intent");
 };
 
-export const sendSignupOTP = async ({ username, identifier }) => {
-  return sendOtp({ username, identifier, intent: "signup" });
+export const sendSignupOTP = async ({ username, identifier, tenant = null }) => {
+  return sendOtp({ username, identifier, intent: "signup", tenant });
 };
 
-export const sendLoginOTP = async (identifier) => {
-  return sendOtp({ identifier, intent: "login" });
+export const sendLoginOTP = async (identifier, tenant = null) => {
+  return sendOtp({ identifier, intent: "login", tenant });
 };
 
 export const verifyOTPAndCreateTokens = async (
@@ -172,17 +176,14 @@ export const verifyOTPAndCreateTokens = async (
   if (user.isActive === false) throw new Error("Account disabled");
   if (user.isLocked) throw new Error("Account locked");
 
-  // OTP existence
   if (!user.otpHash) {
     throw new Error("OTP not found or already used");
   }
 
-  // OTP expiry
   if (!user.otpExpires || user.otpExpires < Date.now()) {
     throw new Error("OTP expired");
   }
 
-  // OTP compare
   const isMatch = await bcrypt.compare(String(otp), user.otpHash);
   if (!isMatch) {
     user.otpAttempts += 1;
@@ -195,7 +196,6 @@ export const verifyOTPAndCreateTokens = async (
     throw new Error("Invalid OTP");
   }
 
-  // OTP success -> clear
   user.otpHash = undefined;
   user.otpExpires = undefined;
   user.otpAttempts = 0;
@@ -212,9 +212,7 @@ export const verifyOTPAndCreateTokens = async (
     .toLowerCase();
 
   if (normalizedIntent === "admin") {
-    // ensure admin profile exists
     await ensureAdminProfile(user._id);
-    // Set pending_admin if not already a higher role
     if (user.role !== "admin" && user.role !== "super_admin") {
       user.role = "pending_admin";
     }
@@ -223,7 +221,6 @@ export const verifyOTPAndCreateTokens = async (
     throw new Error("Invalid intent");
   }
 
-  // JWT Tokens
   const accessToken = jwt.sign(
     { userId: user._id },
     process.env.JWT_ACCESS_SECRET,
@@ -236,7 +233,6 @@ export const verifyOTPAndCreateTokens = async (
     { expiresIn: "7d" },
   );
 
-  // Hash refresh token
   const refreshTokenHash = crypto
     .createHash("sha256")
     .update(refreshToken)
@@ -244,7 +240,6 @@ export const verifyOTPAndCreateTokens = async (
 
   user.refreshTokens = user.refreshTokens || [];
 
-  // New device detect
   const sessionInfo = sessionMeta || {};
   const newDevice = isNewDevice(user, sessionInfo.ip, sessionInfo.userAgent);
 
