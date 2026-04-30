@@ -1,6 +1,5 @@
 import * as service from "../../services/plan.service.js";
 
-
 export const createPricingPlan = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
@@ -14,7 +13,9 @@ export const createPricingPlan = async (req, res) => {
 
 export const listAllPricingPlans = async (req, res) => {
   try {
-    const plans = await service.listAllPlans();
+    const userId = req.user._id; // ✅ IMPORTANT (_id not id)
+
+    const plans = await service.listAllPlans(userId);
 
     if (!plans || plans.length === 0) {
       return res.status(404).json({ message: "No pricing plans found" });
@@ -29,13 +30,14 @@ export const listAllPricingPlans = async (req, res) => {
   }
 };
 
-
 export const listPricingPlans = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
     const plans = await service.listPlans(spaceId);
     if (!plans || plans.length === 0) {
-      return res.status(404).json({ message: "No active pricing plans found for this space" });
+      return res
+        .status(404)
+        .json({ message: "No active pricing plans found for this space" });
     }
     return res.status(200).json({ message: "Plans fetched", data: plans });
   } catch (err) {
@@ -46,7 +48,12 @@ export const listPricingPlans = async (req, res) => {
 export const updatePricingPlan = async (req, res) => {
   try {
     const { spaceId, planId } = req.params;
-    const plan = await service.updatePlan(spaceId, planId, req.body, req.user?.id);
+    const plan = await service.updatePlan(
+      spaceId,
+      planId,
+      req.body,
+      req.user?.id,
+    );
     if (!plan) return res.status(404).json({ message: "Plan not found" });
     return res.status(200).json({ message: "Plan updated", data: plan });
   } catch (err) {

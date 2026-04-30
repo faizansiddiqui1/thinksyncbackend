@@ -1,6 +1,6 @@
+// middleware/requireSuperAdmin.js
 export function requireSuperAdmin(req, res, next) {
   try {
-    // requireAuth middleware must run before this
     const user = req.user;
 
     if (!user) {
@@ -25,6 +25,7 @@ export function requireSuperAdmin(req, res, next) {
     });
   }
 }
+
 
 
 export function requireRole(...roles) {

@@ -214,6 +214,7 @@ export const deleteSpace = async (req, res) => {
 };
 
 
+
 // ===================================================
 // User side 
 // ===================================================
@@ -273,3 +274,39 @@ export const getSpaceDetailsBySlug = async (req, res) => {
 };
 
 
+// Super admin 
+export const searchSpacesController = async (req, res) => {
+  try {
+    const { q = "" } = req.query;
+
+    let filter = {};
+
+    // 🔥 role-based filtering
+    if (req.user.role !== "super_admin") {
+      filter.owner = req.user.id;
+    }
+
+    if (q) {
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { slug: { $regex: q, $options: "i" } },
+        { spaceType: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const spaces = await Space.find(filter)
+      .select("name spaceType slug privateOfficeDetails")
+      .limit(20)
+      .lean();
+
+    return res.json({
+      success: true,
+      items: spaces,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};

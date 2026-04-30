@@ -7,7 +7,7 @@ const router = express.Router();
 // create / list are under space
 router.post("/spaces/:spaceId/pricing-plans", createPricingPlan);
 
-router.get("/pricing-plans", listAllPricingPlans);
+router.get("/pricing-plans", requireAuth, listAllPricingPlans);
 
 router.get("/spaces/:spaceId/pricing-plans", listPricingPlans);
 

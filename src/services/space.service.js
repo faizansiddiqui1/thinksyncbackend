@@ -39,7 +39,7 @@ const isPlainObject = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
 
 // ===================================================
-// Create Spaces
+// Create Spaces  
 // ===================================================
 export const createSpace = async (spaceData, userId = null) => {
   try {

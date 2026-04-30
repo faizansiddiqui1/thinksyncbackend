@@ -123,10 +123,17 @@ export const loadUserProfile = async (req, res, next) => {
 
 export const requireAdminAccess = async (req, res, next) => {
   try {
-    if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
-    // Owner level → strict KYC check
-    if (req.user.role === "admin" || req.user.role === "super_admin") {
+    // ✅ Super Admin → FULL ACCESS (no KYC)
+    if (req.user.role === "super_admin") {
+      return next();
+    }
+
+    // ✅ Normal Admin → KYC required
+    if (req.user.role === "admin") {
       const profile = await AdminProfile.findOne({ owner: req.user._id });
 
       if (!profile || profile.kyc?.status !== "approved") {
@@ -137,12 +144,13 @@ export const requireAdminAccess = async (req, res, next) => {
       return next();
     }
 
-    // RBAC users → allow if they have ANY custom role
+    // ✅ RBAC users
     if (req.user.customRoles?.length > 0) {
       return next();
     }
 
     return res.status(403).json({ message: "Admin panel access denied" });
+
   } catch (err) {
     return res.status(500).json({ message: "Server error" });
   }

@@ -93,6 +93,12 @@ const userSchema = new Schema(
       minlength: [3, "Username must be at least 3 characters long"],
       maxlength: [20, "Username cannot exceed 20 characters"],
     },
+
+    companyId: {
+      type: Schema.Types.ObjectId,
+      ref: "Company",
+    },
+
     phoneNumber: {
       type: String,
       unique: true,
@@ -138,14 +144,20 @@ const userSchema = new Schema(
         ref: "Role",
       },
     ],
+
     kyc: { type: KycSchema, default: () => ({}) },
+
     isActive: { type: Boolean, default: true },
+
     loginAttempts: { type: Number, default: 0 },
+
     lockUntil: Date,
+
     refreshTokens: {
       type: [RefreshTokenSchema],
       select: false,
     },
+    
     lastLogin: Date,
     otpHash: String,
     otpExpires: Date,

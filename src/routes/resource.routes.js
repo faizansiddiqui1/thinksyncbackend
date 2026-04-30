@@ -31,7 +31,7 @@ router.delete(
 router.get("/space/:spaceId/resources", controller.listResourcesBySpace);
 
 // GET /resources (admin - get all resources)
-router.get("/resources", controller.getAllResources);
+router.get("/resources", requireAuth, controller.getAllResources);
 
 // Resource-level operations
 // GET /resources/:resourceId

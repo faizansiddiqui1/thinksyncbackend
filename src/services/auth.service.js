@@ -150,7 +150,11 @@ export const sendOtp = async ({
   throw new Error("Invalid intent");
 };
 
-export const sendSignupOTP = async ({ username, identifier, tenant = null }) => {
+export const sendSignupOTP = async ({
+  username,
+  identifier,
+  tenant = null,
+}) => {
   return sendOtp({ username, identifier, intent: "signup", tenant });
 };
 
@@ -170,7 +174,9 @@ export const verifyOTPAndCreateTokens = async (
 
   const { isMail, email, phone } = resolveIdentifier(identifier);
 
-  const user = await User.findOne(isMail ? { email } : { phoneNumber: phone });
+  const user = await User.findOne(
+    isMail ? { email } : { phoneNumber: phone },
+  ).populate("companyId");
 
   if (!user) throw new Error("User not found");
   if (user.isActive === false) throw new Error("Account disabled");
@@ -262,5 +268,10 @@ export const verifyOTPAndCreateTokens = async (
 
   await user.save();
 
-  return { accessToken, refreshToken, user };
+  return {
+    accessToken,
+    refreshToken,
+    user,
+    company: user.companyId || null, // 🔥 ADD THIS
+  };
 };

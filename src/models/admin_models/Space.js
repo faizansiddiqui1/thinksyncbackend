@@ -47,26 +47,26 @@ const amenitySchema = new Schema(
 /* =========================
    LISTING PRICES (NEW)
 ========================= */
-const listingPricesSchema = new Schema(
-  {
-    show: {
-      hourly: { type: Boolean, default: false },
-      daily: { type: Boolean, default: false },
-      weekly: { type: Boolean, default: false },
-      monthly: { type: Boolean, default: false },
-    },
-    hourly: { type: Number, min: 0, default: null },
-    daily: { type: Number, min: 0, default: null },
-    weekly: { type: Number, min: 0, default: null },
-    monthly: { type: Number, min: 0, default: null },
-    currency: {
-      type: String,
-      enum: ["INR", "USD", "EUR"],
-      default: "INR",
-    },
-  },
-  { _id: false },
-);
+// const listingPricesSchema = new Schema(
+//   {
+//     show: {
+//       hourly: { type: Boolean, default: false },
+//       daily: { type: Boolean, default: false },
+//       weekly: { type: Boolean, default: false },
+//       monthly: { type: Boolean, default: false },
+//     },
+//     hourly: { type: Number, min: 0, default: null },
+//     daily: { type: Number, min: 0, default: null },
+//     weekly: { type: Number, min: 0, default: null },
+//     monthly: { type: Number, min: 0, default: null },
+//     currency: {
+//       type: String,
+//       enum: ["INR", "USD", "EUR"],
+//       default: "INR",
+//     },
+//   },
+//   { _id: false },
+// );
 
 /* =========================
    OPERATING HOURS
@@ -170,7 +170,7 @@ const spaceSchema = new Schema(
     name: { type: String, required: true, trim: true },
     slug: { type: String, unique: true, lowercase: true },
 
-    shortDescription: { type: String, required: true, maxlength: 200 },
+    shortDescription: { type: String, maxlength: 200 },
     longDescription: { type: String, required: true },
     tagline: { type: String, maxlength: 100 },
 
@@ -186,17 +186,67 @@ const spaceSchema = new Schema(
         "managed_office",
         "virtual_office",
         "event_space",
-      ], 
+      ],
       required: true,
     },
 
-    // inventory: {
-    //   total: { type: Number, default: 0 }, // total offices
-    //   available: { type: Number, default: 0 }, // available now
-    //   booked: { type: Number, default: 0 }, // already booked
-    //   startDateTime: Date,
-    //   endDateTime: Date,
-    // },
+    privateOfficeDetails: {
+      floorSize: Number, // 25500 sq ft
+
+      floorConfiguration: String, // "3B+G+21"
+
+      buildingGrade: {
+        type: String,
+        enum: ["A", "B", "C"],
+      },
+
+      lockInPeriodMonths: Number, // 36
+
+      securityDepositMonths: Number, // 6
+
+      noticePeriodMonths: Number,
+
+      furnishing: {
+        type: String,
+        enum: ["furnished", "semi_furnished", "unfurnished"],
+      },
+
+      possessionStatus: {
+        type: String,
+        enum: ["ready", "under_construction"],
+      },
+
+      availabilityStatus: {
+        type: String,
+        enum: ["available", "occupied", "reserved"],
+        default: "available",
+      },
+    },
+
+    priceBreakup: {
+      rentPerSqFt: Number, // 100
+      maintenancePerSqFt: Number, // 15
+
+      totalPerSqFt: Number, // 115 (optional calc)
+
+      currency: { type: String, default: "INR" },
+
+      isNegotiable: { type: Boolean, default: true },
+
+      excludesTaxes: { type: Boolean, default: true },
+    },
+
+    buildingInfo: {
+      name: String,
+      totalFloors: Number,
+      yearBuilt: Number,
+      developer: String,
+    },
+
+    leasingType: {
+      type: String,
+      enum: ["coworking", "private_office", "vertual_office"],
+    },
 
     bookingRules: {
       supportsHourly: { type: Boolean, default: true },
@@ -213,7 +263,7 @@ const spaceSchema = new Schema(
       },
     ],
     // NEW listing level prices
-    listingPrices: { type: listingPricesSchema, default: () => ({}) },
+    // listingPrices: { type: listingPricesSchema, default: () => ({}) },
 
     capacity: {
       min: { type: Number, required: true, min: 1 },
@@ -299,7 +349,7 @@ spaceSchema.pre("validate", function (next) {
     ["hourly", "daily", "weekly", "monthly"].forEach((k) => {
       const v = this.listingPrices[k];
       if (typeof v === "number" && v >= 0) prices.push(v);
-    });  
+    });
   }
 
   if (prices.length) {

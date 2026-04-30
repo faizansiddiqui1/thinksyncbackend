@@ -10,7 +10,6 @@ import {
 import { getRefreshCookieOptions } from "../../utils/cookieUtils.js";
 import mongoose from "mongoose";
 
-
 export const sendOtpHandler = async (req, res) => {
   try {
     const { identifier, username, intent } = req.body;
@@ -36,7 +35,6 @@ export const sendOtpHandler = async (req, res) => {
   }
 };
 
-
 export const signup = async (req, res) => {
   try {
     const { username, identifier } = req.body;
@@ -55,7 +53,6 @@ export const signup = async (req, res) => {
   }
 };
 
- 
 export const login = async (req, res) => {
   try {
     const { identifier } = req.body;
@@ -72,7 +69,6 @@ export const login = async (req, res) => {
   }
 };
 
-
 export const verifyOtp = async (req, res) => {
   try {
     const { identifier, otp, intent } = req.body;
@@ -85,26 +81,26 @@ export const verifyOtp = async (req, res) => {
       return res.status(400).json({ message: "Identifier and OTP required" });
     }
 
-    const { accessToken, refreshToken, user } = await verifyOTPAndCreateTokens(
-      identifier,
-      otp,
-      {
-        ip,
-        userAgent,
-      },
-      { intent },
-    );
+    const { accessToken, refreshToken, user, company } =
+      await verifyOTPAndCreateTokens(
+        identifier,
+        otp,
+        { ip, userAgent },
+        { intent },
+      );
 
     const cookieOptions = getRefreshCookieOptions();
     res.cookie("refreshToken", refreshToken, cookieOptions);
 
-    res.status(200).json({ accessToken, user: user.toJSON() });
+    res.status(200).json({
+      accessToken,
+      user: user.toJSON(),
+      company,
+    });
   } catch (error) {
     res.status(401).json({ message: error.message });
   }
 };
-
-
 
 export const refreshAccessToken = async (req, res) => {
   try {

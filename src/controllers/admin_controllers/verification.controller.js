@@ -4,6 +4,8 @@ import User from "../../models/user_models/User.js";
 import * as svc from "../../services/verification.service.js";
 import { ApiError } from "../../utils/apiResponse.js";
 
+import Company from "../../models/super_admin_models/Company.model.js";
+
 /** ensure nested object exists */
 export function ensureField(obj, field) {
   if (!obj[field]) obj[field] = {};
@@ -54,16 +56,56 @@ export async function getAdminKycStatusHandler(req, res) {
     const cv = await CompanyVerification.findOne({ userId: user._id });
     const adminProfile = await AdminProfile.findOne({ owner: user._id });
 
+    const company = user.companyId
+      ? await Company.findById(user.companyId).lean()
+      : null;
+
+    // 🔥 FIXED accountType
+    let accountType = "user";
+    let isCompanyAdmin = false;
+    let isEmployee = false;
+
+    if (user.role === "super_admin") {
+      accountType = "super_admin";
+    } else if (company?.owner?.toString() === user._id.toString()) {
+      accountType = "company_admin";
+      isCompanyAdmin = true;
+    } else if (
+      company?.employees?.some((e) => e.user.toString() === user._id.toString())
+    ) {
+      accountType = "employee";
+      isEmployee = true;
+    } else if (user.role === "admin") {
+      accountType = "admin";
+    }
+
     const rawConfig = await getGlobalKycConfig();
     const config = normalizeConfig(rawConfig);
 
+    const userKycStatus = await svc.buildUserKycPayload(user._id);
+
+    // 🔥 COMMON RESPONSE BASE
+    const baseResponse = {
+      success: true,
+      role: user.role,
+
+      accountType,
+      isCompanyAdmin,
+      isEmployee, 
+      companyId: user.companyId || null,
+      company,
+
+      
+      customRoles: user.customRoles || [],
+      config,
+      details: cv || {},
+      reviewedAt: adminProfile?.kyc?.reviewedAt || null,
+      userKycStatus,
+    };
+
     if (!adminProfile) {
       return res.json({
-        success: true,
-        role: user.role,
-        customRoles: user.customRoles || [],
-        config,
-        details: cv || {},
+        ...baseResponse,
         status: "not_submitted",
       });
     }
@@ -74,22 +116,11 @@ export async function getAdminKycStatusHandler(req, res) {
       user.role = "admin";
       user.kyc.status = "approved";
       await user.save();
-
-      user = user.toObject();
-      user.role = "admin";
     }
 
-    const userKycStatus = await svc.buildUserKycPayload(user._id);
-
     return res.json({
-      success: true,
-      role: user.role,
-      customRoles: user.customRoles || [],
+      ...baseResponse,
       status: decision,
-      config,
-      reviewedAt: adminProfile.kyc.reviewedAt,
-      details: cv || {},
-      userKycStatus,
     });
   } catch (err) {
     return res.status(500).json({

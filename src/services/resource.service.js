@@ -20,7 +20,8 @@ const ensureSpaceExists = async (spaceId) => {
 };
 
 const ensureResourceExists = async (resourceId) => {
-  const resource = await Resource.findById(resourceId).select("_id images space");
+  const resource =
+    await Resource.findById(resourceId).select("_id images space");
   if (!resource) {
     const err = new Error("Resource not found");
     err.status = 404;
@@ -40,8 +41,10 @@ export async function createResourceForSpace(spaceId, data, tenant = null) {
   return resource;
 }
 
-export async function getAllResources() {
-  return Resource.find({})
+export async function getAllResources(userId) {
+  if (!userId) throw new Error("userId required");
+
+  return Resource.find({ createdBy: userId }) // ✅ FILTER
     .populate("space", "name slug")
     .sort({ createdAt: -1 })
     .exec();

@@ -23,6 +23,10 @@ import CompanyVerificationRoutes from "./routes/companyverification.routes.js";
 import BookingRoutes from "./routes/booking.routes.js";
 import whiteLabelRoutes from "./routes/whiteLabel.routes.js"
 
+ 
+import enquiryRoutes from "./routes/enquiry.routes.js"
+import onboardingRoutes from "./routes/company.routes.js"
+
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
 
@@ -42,6 +46,7 @@ app.use(
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:4028",
+  "http://192.168.31.110:4028/landing-page",
   process.env.FRONTEND_URL,
 ];
 
@@ -69,7 +74,7 @@ app.post(
 /* -------------------------
    Rate limiter, cookies, body parsers
    ------------------------- */
-app.use(generalRateLimiter);
+// app.use(generalRateLimiter);
 app.use(cookieParser());
 
 app.use(express.json({ limit: "100mb" })); //
@@ -126,6 +131,11 @@ app.use("/api", adminRoutes);
 
 app.use("/api/admin/smtp", smtpRoutes);
 app.use("/api", CompanyVerificationRoutes);
+
+
+app.use("/api/enquiries", enquiryRoutes);
+app.use("/api/onboarding", onboardingRoutes)
+
 
 // white label routes
 app.use("/api/whitelabel", whiteLabelRoutes);

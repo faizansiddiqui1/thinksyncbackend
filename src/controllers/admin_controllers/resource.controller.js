@@ -35,7 +35,9 @@ export async function createResource(req, res, next) {
  */
 export async function getAllResources(req, res, next) {
   try {
-    const resources = await service.getAllResources();
+    const userId = req.user.id; // 👈 logged in admin
+
+    const resources = await service.getAllResources(userId);
 
     return res.status(200).json({
       success: true,
@@ -77,7 +79,11 @@ export async function deleteResourceImage(req, res, next) {
     const { resourceId, imageId } = req.params;
     const tenant = getTenant(req);
 
-    const result = await service.deleteResourceImage(resourceId, imageId, tenant);
+    const result = await service.deleteResourceImage(
+      resourceId,
+      imageId,
+      tenant,
+    );
 
     return res.status(200).json({
       success: true,

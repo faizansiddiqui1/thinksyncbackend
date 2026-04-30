@@ -20,6 +20,7 @@ import {
   getSpaceDetailsBySlug,
   getSpacesList,
   publishSpaceController,
+  searchSpacesController,
   unpublishSpaceController,
   updateSpace,
 } from "../controllers/admin_controllers/space.controller.js";
@@ -119,6 +120,9 @@ router.get(
   placeDetailsController,
 );
 
+
+
+
 // ===================================================
 // Customer side
 // ===================================================
@@ -130,5 +134,16 @@ router.get("/space/:slug", getSpaceDetailsBySlug);
 router.get("/property/search", searchController);
 router.get("/property/near", nearController);
 router.get("/property/suggest", suggestController);
+
+
+// Super admin 
+router.get(
+  "/admin/spaces/search",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("spaces", "read"),
+  searchSpacesController
+);
+
 
 export default router;
