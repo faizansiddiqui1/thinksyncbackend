@@ -15,7 +15,7 @@ export async function createResource(req, res, next) {
   try {
     const { spaceId } = req.params;
     const payload = req.body;
-    const tenant = getTenant(req);
+    const tenant = getTenant(req);  
 
     const resource = await service.createResourceForSpace(
       spaceId,

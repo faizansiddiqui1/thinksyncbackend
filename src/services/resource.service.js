@@ -16,7 +16,7 @@ const ensureSpaceExists = async (spaceId) => {
     err.status = 404;
     throw err;
   }
-  return space;
+  return space; 
 };
 
 const ensureResourceExists = async (resourceId) => {

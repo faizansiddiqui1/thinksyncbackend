@@ -58,12 +58,6 @@ const resourceSchema = new Schema(
       monthly: { type: Number, min: 0, default: null },
     },
 
-    // inventory: {
-    //   total: { type: Number, default: 0 },
-    //   available: { type: Number, default: 0 }, // available now
-    //   booked: { type: Number, default: 0 }, // already booked
-    // },
-
     bookingRules: {
       supportsHourly: { type: Boolean, default: true },
       supportsDaily: { type: Boolean, default: true },
@@ -71,11 +65,18 @@ const resourceSchema = new Schema(
       supportsMonthly: { type: Boolean, default: true },
       bufferMinutes: { type: Number, default: 0 },
     },
-    
+
     currency: { type: String, default: "INR" },
 
     isActive: { type: Boolean, default: true },
-
+    displayOrder: {
+      type: Number,
+      default: 0,
+    },
+    description: {
+      type: String,
+      default: "",
+    },
     capacity: {
       min: { type: Number, required: true, min: 1 },
       max: {
@@ -92,9 +93,6 @@ const resourceSchema = new Schema(
 
     area: Number,
     amenities: [amenitySchema],
-
-    createdAt: { type: Date, default: Date.now },
-    updatedAt: { type: Date, default: Date.now },
   },
   {
     timestamps: true,

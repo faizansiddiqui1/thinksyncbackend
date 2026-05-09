@@ -9,6 +9,7 @@ import {
   publicUrlForKey,
   resolveAwsConfig,
 } from "../config/s3.js";
+import SeatingOption from "../models/admin_models/SeatingOption.js";
 
 const ensureSpaceExists = async (spaceId) => {
   if (!mongoose.Types.ObjectId.isValid(spaceId)) {
@@ -29,6 +30,20 @@ export const getOrCreateMedia = async (spaceId, userId = null) => {
   return media;
 };
 
+const ensureSeatingOptionExists = async (optionId) => {
+  if (!mongoose.Types.ObjectId.isValid(optionId)) {
+    throw new Error("Invalid seating option id");
+  }
+
+  const option = await SeatingOption.findById(optionId).select("_id");
+
+  if (!option) {
+    throw new Error("Seating option not found");
+  }
+
+  return option;
+};
+
 /* ========== PRESIGN IMAGE ========== */
 export const getPresignForImage = async (
   entity,
@@ -45,6 +60,7 @@ export const getPresignForImage = async (
   const folderMap = {
     space: (id) => `spaces/${id}/images`,
     resource: (id) => `spaces/${id}/resources`,
+    seating_option: (id) => `seating-options/${id}/images`,
     kyc: (id) => `kyc/${id}`,
     user: (id) => `users/${id}/avatar`,
   };
@@ -57,6 +73,9 @@ export const getPresignForImage = async (
     await ensureSpaceExists(entityId);
   }
 
+  if (entity === "seating_option") {
+    await ensureSeatingOptionExists(entityId);
+  }
   if (entity === "kyc" && userId && String(entityId) !== String(userId)) {
     throw new Error("You can upload only your own KYC");
   }
@@ -100,7 +119,12 @@ export const getPresignForImage = async (
 };
 
 /* ========== IMAGES ========== */
-export const addImage = async (spaceId, imageData, userId = null, tenant = null) => {
+export const addImage = async (
+  spaceId,
+  imageData,
+  userId = null,
+  tenant = null,
+) => {
   await ensureSpaceExists(spaceId);
 
   if (!imageData?.key) {
@@ -242,7 +266,12 @@ export const getPresignForVideo = async (
   return { uploadUrl, key, previewUrl, expiresIn };
 };
 
-export const addVideo = async (spaceId, videoData, userId = null, tenant = null) => {
+export const addVideo = async (
+  spaceId,
+  videoData,
+  userId = null,
+  tenant = null,
+) => {
   await ensureSpaceExists(spaceId);
 
   if (!videoData?.key) {

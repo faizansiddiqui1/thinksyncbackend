@@ -128,6 +128,7 @@ router.get(
 // ===================================================
 
 router.get("/spaces", getSpacesList);
+
 router.get("/space/:slug", getSpaceDetailsBySlug);
 
 

@@ -1,5 +1,3 @@
-
-
 // /controllers/space.controller.js
 
 import Space from "../../models/admin_models/Space.js";
@@ -9,17 +7,16 @@ import {
   updateSpace as serviceUpdateSpace,
   deleteSpace as serviceDeleteSpace,
   fetchSpacesListing as serviceFetchSpacesListing,
-  fetchSpaceDetailsBySlug as serviceFetchSpaceDetailsBySlug,
-  fetchSpacesListing
+  fetchSpacesListing,
+  fetchSpaceDetailsBySlug,
 } from "../../services/space.service.js";
-
 
 import Resource from "../../models/admin_models/ResourceSchema.js";
 import PricingPlan from "../../models/admin_models/PricingPlan.js";
 import Offer from "../../models/admin_models/Offer.js";
-import * as mediaService from "../../services/spaceMedia.service.js";
 import SpaceMedia from "../../models/admin_models/SpaceMedia.js";
-
+import VirtualOfficePlan from "../../models/admin_models/VirtualOfficePlan.js";
+import * as mediaService from "../../services/spaceMedia.service.js";
 
 export const createSpace = async (req, res) => {
   try {
@@ -47,27 +44,50 @@ export const getFullSpaceById = async (req, res) => {
     const { id } = req.params;
 
     const space = await Space.findById(id).lean();
-    if (!space) return res.status(404).json({ error: "Space not found" });
 
-    const [resources, pricingPlans, offers, media] = await Promise.all([
-      Resource.find({ space: id }).lean(),
-      PricingPlan.find({ space: id }).lean(),
-      Offer.find({ space: id }).lean(),
-      mediaService.getMediaBySpace(id),
-    ]);
+    if (!space) {
+      return res.status(404).json({
+        error: "Space not found",
+      });
+    }
+
+    const [resources, pricingPlans, offers, media, virtualOfficePlans] =
+      await Promise.all([
+        Resource.find({ space: id }).lean(),
+
+        PricingPlan.find({ space: id }).lean(),
+
+        Offer.find({ space: id }).lean(),
+
+        mediaService.getMediaBySpace(id),
+
+        VirtualOfficePlan.find({
+          space: id,
+          isActive: true,
+        }).lean(),
+      ]);
 
     return res.json({
       data: {
         ...space,
+
         resources,
+
         pricingPlans,
+
         offers,
+
+        virtualOfficePlans,
+
         media,
       },
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+
+    return res.status(500).json({
+      error: err.message,
+    });
   }
 };
 
@@ -76,44 +96,77 @@ export const getFullSpacesForOwner = async (req, res) => {
     const ownerId = req.user.id;
 
     const spaces = await Space.find({ owner: ownerId }).lean();
-    if (!spaces.length) return res.json({ items: [] });
 
-    const ids = spaces.map(s => s._id);
+    if (!spaces.length) {
+      return res.json({ items: [] });
+    }
 
-    const [resources, pricingPlans, offers, medias] = await Promise.all([
-      Resource.find({ space: { $in: ids } }).lean(),
-      PricingPlan.find({ space: { $in: ids } }).lean(),
-      Offer.find({ space: { $in: ids } }).lean(),
-      SpaceMedia.find({ space: { $in: ids } }).lean(),
-    ]);
+    const ids = spaces.map((s) => s._id);
+
+    const [resources, pricingPlans, offers, medias, virtualOfficePlans] =
+      await Promise.all([
+        Resource.find({ space: { $in: ids } }).lean(),
+
+        PricingPlan.find({ space: { $in: ids } }).lean(),
+
+        Offer.find({ space: { $in: ids } }).lean(),
+
+        SpaceMedia.find({ space: { $in: ids } }).lean(),
+
+        VirtualOfficePlan.find({
+          space: { $in: ids },
+          isActive: true,
+        }).lean(),
+      ]);
 
     const group = (arr, key) => {
       const m = new Map();
-      arr.forEach(i => {
+
+      arr.forEach((i) => {
         const k = String(i[key]);
-        if (!m.has(k)) m.set(k, []);
+
+        if (!m.has(k)) {
+          m.set(k, []);
+        }
+
         m.get(k).push(i);
       });
+
       return m;
     };
 
     const resMap = group(resources, "space");
-    const planMap = group(pricingPlans, "space");
-    const offerMap = group(offers, "space");
-    const mediaMap = new Map(medias.map(m => [String(m.space), m]));
 
-    const items = spaces.map(s => ({
+    const planMap = group(pricingPlans, "space");
+
+    const offerMap = group(offers, "space");
+
+    const virtualOfficeMap = group(virtualOfficePlans, "space");
+
+    const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
+
+    const items = spaces.map((s) => ({
       ...s,
+
       resources: resMap.get(String(s._id)) || [],
+
       pricingPlans: planMap.get(String(s._id)) || [],
+
       offers: offerMap.get(String(s._id)) || [],
-      media: mediaMap.get(String(s._id)) || { images: [], video: null },
+
+      virtualOfficePlans: virtualOfficeMap.get(String(s._id)) || [],
+
+      media: mediaMap.get(String(s._id)) || {
+        images: [],
+        video: null,
+      },
     }));
 
-    res.json({ items });
-
+    return res.json({ items });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message,
+    });
   }
 };
 
@@ -213,14 +266,14 @@ export const deleteSpace = async (req, res) => {
   }
 };
 
-
-
 // ===================================================
-// User side 
+// User side
 // ===================================================
 
 export const getSpacesList = async (req, res) => {
   try {
+    console.log("Runned Space list");
+    
     const query = {
       page: req.query.page,
       limit: req.query.limit,
@@ -229,11 +282,12 @@ export const getSpacesList = async (req, res) => {
       featured: req.query.featured,
       search: req.query.search,
       sort: req.query.sort,
+      longTerm: req.query.longTerm,
+      shortTerm: req.query.shortTerm, // add this
     };
 
     const result = await serviceFetchSpacesListing(query);
 
-    // CDN cache (optional)
     res.set("Cache-Control", "public, max-age=30, s-maxage=60");
 
     return res.status(200).json({
@@ -250,31 +304,57 @@ export const getSpacesList = async (req, res) => {
   }
 };
 
+
 export const getSpaceDetailsBySlug = async (req, res) => {
   try {
+
+    console.log("runned get space slug");
+    
     const { slug } = req.params;
+
     if (!slug || typeof slug !== "string") {
-      return res.status(400).json({ success: false, error: "Invalid slug" });
+      return res.status(400).json({
+        success: false,
+        error: "Invalid slug",
+      });
     }
 
-    const space = await serviceFetchSpaceDetailsBySlug(slug);
+    const data = await fetchSpaceDetailsBySlug(slug);
+
+    
 
     return res.status(200).json({
       success: true,
-      data: space,
+      data,
     });
   } catch (err) {
-    console.error("[getSpaceDetailsBySlug] ", err);
-    // 404 for not found, 500 for other errors
-    if (err.message && /not found/i.test(err.message)) {
-      return res.status(404).json({ success: false, error: err.message });
+    console.error(
+      "[getSpaceDetailsBySlug]",
+      err
+    );
+
+    if (
+      err.message &&
+      /not found/i.test(err.message)
+    ) {
+      return res.status(404).json({
+        success: false,
+        error: err.message,
+      });
     }
-    return res.status(500).json({ success: false, error: err.message });
+
+    return res.status(500).json({
+      success: false,
+      error:
+        err.message || "Internal server error",
+    });
   }
 };
 
 
-// Super admin 
+
+
+// Super admin
 export const searchSpacesController = async (req, res) => {
   try {
     const { q = "" } = req.query;

@@ -9,7 +9,12 @@ const { Schema } = mongoose;
 const addressSchema = new Schema(
   {
     street: { type: String, required: true, trim: true },
-    city: { type: String, required: true, trim: true, index: true },
+    city: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "City",
+      required: true,
+      index: true,
+    },
     state: { type: String, required: true, trim: true },
     pincode: { type: String, required: true, trim: true },
     country: { type: String, default: "India", trim: true },
@@ -40,33 +45,10 @@ const amenitySchema = new Schema(
     type: { type: String, default: "other" },
     available: { type: Boolean, default: true },
     description: { type: String, default: "" },
+    isPremium: { type: Boolean, default: false },
   },
   { _id: false },
 );
-
-/* =========================
-   LISTING PRICES (NEW)
-========================= */
-// const listingPricesSchema = new Schema(
-//   {
-//     show: {
-//       hourly: { type: Boolean, default: false },
-//       daily: { type: Boolean, default: false },
-//       weekly: { type: Boolean, default: false },
-//       monthly: { type: Boolean, default: false },
-//     },
-//     hourly: { type: Number, min: 0, default: null },
-//     daily: { type: Number, min: 0, default: null },
-//     weekly: { type: Number, min: 0, default: null },
-//     monthly: { type: Number, min: 0, default: null },
-//     currency: {
-//       type: String,
-//       enum: ["INR", "USD", "EUR"],
-//       default: "INR",
-//     },
-//   },
-//   { _id: false },
-// );
 
 /* =========================
    OPERATING HOURS
@@ -135,6 +117,8 @@ const transportSchema = new Schema(
     busDistance: Number,
     nearestRailway: String,
     railwayDistance: Number,
+    nearestAirport: String,
+    airportDistance: String,
   },
   { _id: false },
 );
@@ -176,46 +160,48 @@ const spaceSchema = new Schema(
 
     searchKeywords: [String],
 
-    // calculated automatically
-    startingPrice: Number,
+    // denormalized / optional, can be used for sorting/filtering cards
+    startingPrice: { type: Number, default: null },
 
     spaceType: {
       type: String,
       enum: [
+        "coworking_space",
+        "cowork_space", // legacy alias
         "private_office",
         "managed_office",
         "virtual_office",
+        "vertual_office", // legacy alias
         "event_space",
       ],
       required: true,
+      index: true,
+    },
+
+    // controls what flows this space supports in the admin / frontend
+    listingModes: {
+      shortTerm: { type: Boolean, default: true },
+      longTerm: { type: Boolean, default: false },
     },
 
     privateOfficeDetails: {
-      floorSize: Number, // 25500 sq ft
-
-      floorConfiguration: String, // "3B+G+21"
-
+      floorSize: Number,
+      floorConfiguration: String,
       buildingGrade: {
         type: String,
         enum: ["A", "B", "C"],
       },
-
-      lockInPeriodMonths: Number, // 36
-
-      securityDepositMonths: Number, // 6
-
+      lockInPeriodMonths: Number,
+      securityDepositMonths: Number,
       noticePeriodMonths: Number,
-
       furnishing: {
         type: String,
         enum: ["furnished", "semi_furnished", "unfurnished"],
       },
-
       possessionStatus: {
         type: String,
         enum: ["ready", "under_construction"],
       },
-
       availabilityStatus: {
         type: String,
         enum: ["available", "occupied", "reserved"],
@@ -223,16 +209,42 @@ const spaceSchema = new Schema(
       },
     },
 
-    priceBreakup: {
-      rentPerSqFt: Number, // 100
-      maintenancePerSqFt: Number, // 15
+    // myHQ-style center summary; keep this as the source of truth
+    centerDetails: {
+      totalCenterArea: {
+        type: Number,
+        default: null,
+      },
 
-      totalPerSqFt: Number, // 115 (optional calc)
+      totalSeats: {
+        type: Number,
+        default: null,
+      },
+
+      totalBuildingFloors: {
+        type: Number,
+        default: null,
+      },
+
+      usedFloors: {
+        type: [String],
+        default: [],
+      },
+
+      typicalFloorplateArea: {
+        type: Number,
+        default: null,
+      },
+    },
+
+    // keep for private-office / enterprise pricing only
+    priceBreakup: {
+      rentPerSqFt: Number,
+      maintenancePerSqFt: Number,
+      totalPerSqFt: Number,
 
       currency: { type: String, default: "INR" },
-
       isNegotiable: { type: Boolean, default: true },
-
       excludesTaxes: { type: Boolean, default: true },
     },
 
@@ -243,11 +255,6 @@ const spaceSchema = new Schema(
       developer: String,
     },
 
-    leasingType: {
-      type: String,
-      enum: ["coworking", "private_office", "vertual_office"],
-    },
-
     bookingRules: {
       supportsHourly: { type: Boolean, default: true },
       supportsDaily: { type: Boolean, default: true },
@@ -255,6 +262,7 @@ const spaceSchema = new Schema(
       supportsMonthly: { type: Boolean, default: true },
       bufferMinutes: { type: Number, default: 0 },
     },
+
     blackoutDates: [
       {
         startDateTime: Date,
@@ -262,25 +270,6 @@ const spaceSchema = new Schema(
         reason: String,
       },
     ],
-    // NEW listing level prices
-    // listingPrices: { type: listingPricesSchema, default: () => ({}) },
-
-    capacity: {
-      min: { type: Number, required: true, min: 1 },
-      max: {
-        type: Number,
-        required: true,
-        validate: {
-          validator: function (v) {
-            return v >= this.capacity.min;
-          },
-          message: "Max capacity must be >= min capacity",
-        },
-      },
-    },
-
-    totalArea: { type: Number, required: true },
-    floorNumber: { type: Number, required: true },
 
     access24x7: { type: Boolean, default: false },
     operatingHours: [operatingHoursSchema],
@@ -322,6 +311,7 @@ const spaceSchema = new Schema(
     },
 
     adminNotes: String,
+
     internalFlags: {
       verified: { type: Boolean, default: false },
       premium: { type: Boolean, default: false },
@@ -339,21 +329,8 @@ const spaceSchema = new Schema(
    HOOKS
 ========================= */
 spaceSchema.pre("validate", function (next) {
-  if (this.isNew && !this.slug) {
+  if (this.isNew && !this.slug && this.name) {
     this.slug = slugify(this.name, { lower: true, strict: true });
-  }
-  const prices = [];
-
-  // fallback to listing-level price
-  if (this.listingPrices) {
-    ["hourly", "daily", "weekly", "monthly"].forEach((k) => {
-      const v = this.listingPrices[k];
-      if (typeof v === "number" && v >= 0) prices.push(v);
-    });
-  }
-
-  if (prices.length) {
-    this.startingPrice = Math.min(...prices);
   }
 
   next();
@@ -388,6 +365,12 @@ spaceSchema.virtual("reviews", {
 
 spaceSchema.virtual("resources", {
   ref: "Resource",
+  localField: "_id",
+  foreignField: "space",
+});
+
+spaceSchema.virtual("virtualOfficePlans", {
+  ref: "VirtualOfficePlan",
   localField: "_id",
   foreignField: "space",
 });

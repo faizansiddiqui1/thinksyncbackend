@@ -27,6 +27,13 @@ import whiteLabelRoutes from "./routes/whiteLabel.routes.js"
 import enquiryRoutes from "./routes/enquiry.routes.js"
 import onboardingRoutes from "./routes/company.routes.js"
 
+
+import virtualOfficeRoutes from "./routes/virtualOfficePlan.routes.js"
+
+import CityRoutes from "./routes/City.routes.js"
+
+import SeatingOption from "./routes/seatingOption.routes.js"
+
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
 
@@ -136,6 +143,11 @@ app.use("/api", CompanyVerificationRoutes);
 app.use("/api/enquiries", enquiryRoutes);
 app.use("/api/onboarding", onboardingRoutes)
 
+app.use("/api/virtual-office-plans", virtualOfficeRoutes);
+
+app.use("/api/location", CityRoutes)
+
+app.use("/api/seatingOption", SeatingOption);
 
 // white label routes
 app.use("/api/whitelabel", whiteLabelRoutes);
