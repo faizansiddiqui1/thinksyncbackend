@@ -127,15 +127,18 @@ router.get(
 // Customer side
 // ===================================================
 
+// For space card only needed data for fast fetching
 router.get("/spaces", getSpacesList);
 
+// For full details page data
 router.get("/space/:slug", getSpaceDetailsBySlug);
 
 
+// googel api
 router.get("/property/search", searchController);
 router.get("/property/near", nearController);
 router.get("/property/suggest", suggestController);
-
+ 
 
 // Super admin 
 router.get(

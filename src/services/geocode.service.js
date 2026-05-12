@@ -110,7 +110,8 @@ export const forwardGeocode = async (
   address,
   { tenant } = {}
 ) => {
-  const { apiKey, components } = await resolveGoogleMaps(tenant);
+  const { apiKey, components } =
+    await resolveGoogleMaps(tenant);
 
   ensureKey(apiKey);
 
@@ -124,35 +125,87 @@ export const forwardGeocode = async (
       timeout: 8000,
     });
 
+    // DEBUG
+    console.log(
+      "[GEOCODE RESPONSE]",
+      JSON.stringify(res.data, null, 2)
+    );
+
+    // =========================
+    // GOOGLE STATUS CHECK
+    // =========================
+
+    if (res.data.status !== "OK") {
+      throw new Error(
+        res.data.error_message ||
+          `Google Geocode failed: ${res.data.status}`
+      );
+    }
+
     const result = res.data.results?.[0];
-    if (!result) return {};
+
+    if (!result) {
+      throw new Error(
+        "No geocoding results found"
+      );
+    }
 
     const comps = result.address_components || [];
 
     return {
-      formatted_address: result.formatted_address || "",
+      formatted_address:
+        result.formatted_address || "",
+
       street:
-        [find(comps, "street_number"), find(comps, "route")]
+        [
+          find(comps, "street_number"),
+          find(comps, "route"),
+        ]
           .filter(Boolean)
-          .join(" ") || result.formatted_address,
+          .join(" ") ||
+        result.formatted_address,
+
       city:
         find(comps, "locality") ||
         find(comps, "sublocality") ||
-        find(comps, "administrative_area_level_2") ||
+        find(
+          comps,
+          "administrative_area_level_2"
+        ) ||
         "",
-      state: find(comps, "administrative_area_level_1") || "",
-      country: find(comps, "country") || "",
-      pincode: find(comps, "postal_code") || "",
-      lat: result.geometry?.location?.lat ?? null,
-      lng: result.geometry?.location?.lng ?? null,
+
+      state:
+        find(
+          comps,
+          "administrative_area_level_1"
+        ) || "",
+
+      country:
+        find(comps, "country") || "",
+
+      pincode:
+        find(comps, "postal_code") || "",
+
+      lat:
+        result.geometry?.location?.lat ??
+        null,
+
+      lng:
+        result.geometry?.location?.lng ??
+        null,
+
       address_components: comps,
     };
   } catch (err) {
-    const message =
-      err?.response?.data?.error_message ||
-      err?.message ||
-      "Forward geocode failed";
+    console.error(
+      "[FORWARD GEOCODE ERROR]",
+      err?.response?.data || err.message
+    );
 
-    throw new Error(message);
+    throw new Error(
+      err?.response?.data?.error_message ||
+        err?.message ||
+        "Forward geocode failed"
+    );
   }
 };

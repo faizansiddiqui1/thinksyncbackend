@@ -22,6 +22,7 @@ export const textSearch = async ({ q, lat, lng, limit = 20 }) => {
           near,
           distanceField: "dist.calculated",
           spherical: true,
+          key: "address.location",
           query: { $text: { $search: q } },
           limit: limitN,
         },
@@ -31,7 +32,6 @@ export const textSearch = async ({ q, lat, lng, limit = 20 }) => {
           ownerId: 1,
           name: 1,
           address: 1,
-          location: 1,
           score: { $meta: "textScore" },
           "dist.calculated": 1,
         },
@@ -73,7 +73,8 @@ export const nearSearch = async ({ lat, lng, radius = 20000, limit = 50 }) => {
         near,
         distanceField: "dist.calculated",
         spherical: true,
-        maxDistance: parseInt(radius, 20), // meters
+        key: "address.location",
+        maxDistance: parseInt(radius, 10),
       },
     },
     {
@@ -81,7 +82,6 @@ export const nearSearch = async ({ lat, lng, radius = 20000, limit = 50 }) => {
         ownerId: 1,
         name: 1,
         address: 1,
-        location: 1,
         "dist.calculated": 1,
       },
     },
@@ -91,7 +91,6 @@ export const nearSearch = async ({ lat, lng, radius = 20000, limit = 50 }) => {
   const docs = await Space.aggregate(agg).exec();
   return { docs, total: docs.length };
 };
-
 
 export const suggest = async ({ input, limit = 8 }) => {
   input = String(input || "").trim();
@@ -103,8 +102,10 @@ export const suggest = async ({ input, limit = 8 }) => {
   const prefixRe = new RegExp("^" + escapeRegex(input), "i");
 
   let docs = await Space.find(
-    { $or: [{ name: prefixRe }, { address: prefixRe }] },
-    { name: 1, address: 1, location: 1 }
+    {
+      $or: [{ name: prefixRe }, { "address.street": prefixRe }],
+    },
+    { name: 1, address: 1 },
   )
     .limit(maxLimit)
     .lean()
@@ -116,8 +117,8 @@ export const suggest = async ({ input, limit = 8 }) => {
       _id: d._id,
       name: d.name,
       address: d.address,
-      lat: d.location?.coordinates?.[1] ?? null,
-      lng: d.location?.coordinates?.[0] ?? null,
+      lat: d.address?.location?.coordinates?.[1] ?? null,
+      lng: d.address?.location?.coordinates?.[0] ?? null,
     }));
   }
 
@@ -128,11 +129,9 @@ export const suggest = async ({ input, limit = 8 }) => {
   // Merge prefix results + substring results excluding duplicates
   const subDocs = await Space.find(
     {
-      $or: [{ name: subRe }, { address: subRe }],
-      // optionally exclude ids already in prefix results
-      _id: { $nin: docs.map((d) => d._id) },
+      $or: [{ name: subRe }, { "address.street": subRe }],
     },
-    { name: 1, address: 1, location: 1 }
+    { name: 1, address: 1, location: 1 },
   )
     .limit(maxLimit)
     .lean()
@@ -144,7 +143,7 @@ export const suggest = async ({ input, limit = 8 }) => {
     _id: d._id,
     name: d.name,
     address: d.address,
-    lat: d.location?.coordinates?.[1] ?? null,
-    lng: d.location?.coordinates?.[0] ?? null,
+    lat: d.address?.location?.coordinates?.[1] ?? null,
+    lng: d.address?.location?.coordinates?.[0] ?? null,
   }));
 };

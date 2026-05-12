@@ -40,14 +40,72 @@ const addressSchema = new Schema(
 ========================= */
 const amenitySchema = new Schema(
   {
-    key: { type: String, required: true },
-    label: { type: String, required: true },
-    type: { type: String, default: "other" },
-    available: { type: Boolean, default: true },
-    description: { type: String, default: "" },
-    isPremium: { type: Boolean, default: false },
+    key: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true,
+    },
+
+    label: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // category/type
+    type: {
+      type: String,
+      enum: [
+        "workspace",
+        "facility",
+        "food",
+        "transport",
+        "security",
+        "comfort",
+        "other",
+      ],
+      default: "other",
+    },
+
+    // available or not
+    available: {
+      type: Boolean,
+      default: true,
+    },
+
+    // free / paid
+    pricing: {
+      type: String,
+      enum: ["free", "paid"],
+      default: "free",
+    },
+
+    // premium amenity
+    isPremium: {
+      type: Boolean,
+      default: false,
+    },
+
+    // show on card highlights
+    isHighlighted: {
+      type: Boolean,
+      default: false,
+    },
+
+    // optional short text
+    description: {
+      type: String,
+      default: "",
+    },
+
+    // sorting priority
+    priority: {
+      type: Number,
+      default: 0,
+    },
   },
-  { _id: false },
+  { _id: false }
 );
 
 /* =========================

@@ -39,7 +39,7 @@ const offerSchema = new Schema(
 
     applicablePlanTypes: {
       type: [String],
-      enum: ["hourly", "daily", "monthly"],
+      enum: ["hourly", "daily", "weekly", "monthly"],
       default: undefined,
     },
 

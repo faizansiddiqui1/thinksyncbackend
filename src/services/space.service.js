@@ -12,6 +12,7 @@ import SeatingOption from "../models/admin_models/SeatingOption.js";
 import { normalizePagination, metaFor } from "../utils/pagination.js";
 import ResourceSchema from "../models/admin_models/ResourceSchema.js";
 import mongoose from "mongoose";
+import { forwardGeocode } from "./geocode.service.js";
 
 const ALLOWED_FIELDS = [
   "name",
@@ -313,27 +314,38 @@ const buildCardPayload = ({
   resources,
 }) => {
   const normalizedType = normalizeSpaceType(space.spaceType);
+
   const listingModes = space.listingModes || {};
+
   const isLongTerm = !!listingModes.longTerm;
   const isShortTerm = !!listingModes.shortTerm;
 
   const hasVirtualPlans =
     Array.isArray(virtualOfficePlans) && virtualOfficePlans.length > 0;
+
   const hasSeats = Array.isArray(seatingOptions) && seatingOptions.length > 0;
+
   const hasResources = Array.isArray(resources) && resources.length > 0;
 
   let cardVariant = "generic";
   let pricingSummary = null;
 
+  // =====================================================
+  // CARD TYPE + PRICING SUMMARY
+  // =====================================================
+
   if (normalizedType === "virtual_office" || hasVirtualPlans) {
     cardVariant = "virtual_office";
+
     pricingSummary = buildVirtualOfficeSummary(virtualOfficePlans);
   } else if (normalizedType === "cowork_space") {
     if (isShortTerm) {
       cardVariant = "coworking_short_term";
+
       pricingSummary = buildResourceSummary(resources);
     } else {
       cardVariant = "coworking_long_term";
+
       pricingSummary = buildSeatingSummary(seatingOptions);
     }
   } else if (
@@ -341,67 +353,202 @@ const buildCardPayload = ({
     normalizedType === "managed_office"
   ) {
     cardVariant = normalizedType;
+
     pricingSummary = buildPrivateOfficeSummary(space);
   } else {
     if (hasVirtualPlans) {
       cardVariant = "virtual_office";
+
       pricingSummary = buildVirtualOfficeSummary(virtualOfficePlans);
     } else if (isShortTerm && hasResources) {
       cardVariant = "coworking_short_term";
+
       pricingSummary = buildResourceSummary(resources);
     } else if (hasSeats) {
       cardVariant = "coworking_long_term";
+
       pricingSummary = buildSeatingSummary(seatingOptions);
     } else if (hasResources) {
       cardVariant = "coworking_short_term";
+
       pricingSummary = buildResourceSummary(resources);
     } else {
       cardVariant = normalizedType || "generic";
+
       pricingSummary = buildPrivateOfficeSummary(space);
     }
   }
+
+  // =====================================================
+  // LOCATION
+  // =====================================================
 
   const cityLabel =
     space._cityDoc?.name ||
     space._cityDoc?.slug ||
     (typeof space.address?.city === "string" ? space.address.city : null);
 
-  const addressLine = [cityLabel, space.address?.street || null]
+  const street = space.address?.street?.trim() || "";
+
+  const state = space.address?.state?.trim() || "";
+
+  const country = space.address?.country?.trim() || "India";
+
+  const pincode = space.address?.pincode?.trim() || "";
+
+  const addressLine = [street, cityLabel].filter(Boolean).join(", ");
+
+  const fullAddress = [street, cityLabel, state, pincode, country]
     .filter(Boolean)
     .join(", ");
 
+  // =====================================================
+  // GEO LOCATION
+  // =====================================================
+
+  const rawCoordinates = space.address?.location?.coordinates;
+
+  const hasValidCoordinates =
+    Array.isArray(rawCoordinates) &&
+    rawCoordinates.length === 2 &&
+    typeof rawCoordinates[0] === "number" &&
+    typeof rawCoordinates[1] === "number";
+
+  const longitude = hasValidCoordinates ? rawCoordinates[0] : null;
+
+  const latitude = hasValidCoordinates ? rawCoordinates[1] : null;
+
+  // =====================================================
+  // MEDIA
+  // =====================================================
+
+  const images = Array.isArray(media?.images) ? media.images : [];
+
+  const thumbnail = images?.[0]?.url || null;
+
+  // =====================================================
+  // RESPONSE
+  // =====================================================
+
   return {
     _id: space._id,
+
     name: space.name,
+
     slug: space.slug,
+
     shortDescription: space.shortDescription || "",
+
     tagline: space.tagline || "",
+
     spaceType: space.spaceType,
+
+    normalizedSpaceType: normalizedType,
+
     cardVariant,
+
+    // =====================================================
+    // LOCATION
+    // =====================================================
+
     location: {
       cityId: space.address?.city || null,
+
       cityName: cityLabel,
-      state: space.address?.state || "",
-      street: space.address?.street || "",
+
+      state,
+
+      country,
+
+      street,
+
       addressLine,
-      pincode: space.address?.pincode || "",
+
+      fullAddress,
+
+      pincode,
+
+      latitude,
+
+      longitude,
+
+      coordinates:
+        latitude != null && longitude != null
+          ? {
+              type: "Point",
+              coordinates: [longitude, latitude],
+            }
+          : null,
     },
+
+    // =====================================================
+    // RATINGS
+    // =====================================================
+
     isFeatured: !!space.isFeatured,
+
     averageRating: space.averageRating ?? 0,
+
     reviewCount: space.reviewCount ?? 0,
-    amenities: space.amenities?.slice(0, 3) || [],
-    images: media?.images || [],
-    thumbnail: media?.images?.[0]?.url || null,
+
+    // =====================================================
+    // AMENITIES
+    // =====================================================
+
+    amenities: Array.isArray(space.amenities)
+      ? space.amenities.slice(0, 6)
+      : [],
+
+    // =====================================================
+    // MEDIA
+    // =====================================================
+
+    images,
+
+    thumbnail,
+
     video: media?.video || null,
+
+    // =====================================================
+    // PRICING
+    // =====================================================
+
     pricingSummary,
+
+    // =====================================================
+    // CONFIG
+    // =====================================================
+
     listingModes: space.listingModes || {},
+
     bookingRules: space.bookingRules || {},
+
     access24x7: !!space.access24x7,
+
+    operatingHours: space.operatingHours || null,
+
+    // =====================================================
+    // DETAILS
+    // =====================================================
+
     centerDetails: space.centerDetails || null,
+
     privateOfficeDetails: space.privateOfficeDetails || null,
+
     priceBreakup: space.priceBreakup || null,
-    tags: space.tags || [],
-    categories: space.categories || [],
+
+    // =====================================================
+    // TAXONOMY
+    // =====================================================
+
+    tags: Array.isArray(space.tags) ? space.tags : [],
+
+    categories: Array.isArray(space.categories) ? space.categories : [],
+
+    // =====================================================
+    // CTA
+    // =====================================================
+
     ctaLabel:
       cardVariant === "virtual_office"
         ? "Get Quote"
@@ -416,7 +563,7 @@ const buildCardPayload = ({
 // ===================================================
 // Create Spaces
 // ===================================================
-export const createSpace = async (spaceData, userId = null) => {
+export const createSpace = async (spaceData, userId = null, tenant = null) => {
   try {
     if (!userId) {
       throw new Error("User id required to create space");
@@ -424,11 +571,58 @@ export const createSpace = async (spaceData, userId = null) => {
 
     spaceData.owner = userId;
 
+    const coords = spaceData?.address?.location?.coordinates;
+
+    if (
+      !Array.isArray(coords) ||
+      coords.length !== 2 ||
+      !Number.isFinite(coords[0]) ||
+      !Number.isFinite(coords[1]) ||
+      (coords[0] === 0 && coords[1] === 0)
+    ) {
+      delete spaceData.address.location;
+    }
+
+    let cityName = "";
+
+    if (spaceData?.address?.city) {
+      const cityDoc = await City.findById(spaceData.address.city)
+        .select("name")
+        .lean();
+
+      cityName = cityDoc?.name || "";
+    }
+
+    const addressParts = [
+      spaceData?.address?.street,
+      cityName,
+      spaceData?.address?.state,
+      spaceData?.address?.pincode,
+      spaceData?.address?.country || "India",
+    ].filter(Boolean);
+
+    const fullAddress = addressParts.join(", ");
+
+    try {
+      const geo = await forwardGeocode(fullAddress, { tenant });
+
+      if (geo?.lat != null && geo?.lng != null) {
+        spaceData.address.location = {
+          type: "Point",
+          coordinates: [geo.lng, geo.lat],
+        };
+      }
+    } catch (geoErr) {
+      console.error("[GEOCODE ERROR]", geoErr.message);
+    }
+
     const space = new Space(spaceData);
+
     await space.save();
+
     return space;
   } catch (error) {
-    console.error("[serviceCreateSpace] error saving space:", error);
+    console.error("[serviceCreateSpace]", error);
     throw error;
   }
 };

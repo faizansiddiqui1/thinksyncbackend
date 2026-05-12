@@ -48,6 +48,11 @@ const VirtualOfficePlanSchema = new Schema(
       },
     },
 
+    whatYouGet: {
+      type: [String],
+      default: [],
+    },
+
     inclusions: {
       type: [String],
       default: [],

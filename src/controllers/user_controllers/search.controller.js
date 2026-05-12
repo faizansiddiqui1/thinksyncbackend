@@ -1,10 +1,10 @@
 // backend/controllers/property.controller.js
-import { textSearch, nearSearch, suggest } from "../../services/search.service.js";
+import {
+  textSearch,
+  nearSearch,
+  suggest,
+} from "../../services/search.service.js";
 
-/**
- * GET /api/property/search?q=...&lat=..&lng=..&limit=..
- * Text search, optional lat/lng to bias by distance
- */
 export const searchController = async (req, res) => {
   try {
     const q = req.query.q || req.query.query || "";
@@ -25,8 +25,8 @@ export const searchController = async (req, res) => {
         _id: d._id,
         name: d.name ?? null,
         address: d.address ?? null,
-        lat: d.location?.coordinates?.[1] ?? null,
-        lng: d.location?.coordinates?.[0] ?? null,
+        lat: d.address?.location?.coordinates?.[1] ?? null,
+        lng: d.address?.location?.coordinates?.[0] ?? null,
         distance_m: m,
         distance_km: m !== null ? Number((m / 1000).toFixed(3)) : null,
         score: d.score ?? null,
@@ -39,9 +39,6 @@ export const searchController = async (req, res) => {
   }
 };
 
-/**
- * GET /api/property/near?lat=..&lng=..&radius=5000&limit=20
- */
 export const nearController = async (req, res) => {
   try {
     const lat = req.query.lat ? parseFloat(req.query.lat) : null;
@@ -60,8 +57,8 @@ export const nearController = async (req, res) => {
         _id: d._id,
         name: d.name,
         address: d.address,
-        lat: d.location?.coordinates?.[1] ?? null,
-        lng: d.location?.coordinates?.[0] ?? null,
+        lat: d.address?.location?.coordinates?.[1] ?? null,
+        lng: d.address?.location?.coordinates?.[0] ?? null,
         distance_m: meters,
         distance_km: meters != null ? +(meters / 1000).toFixed(3) : null,
       };
@@ -72,8 +69,6 @@ export const nearController = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
-
 
 export const suggestController = async (req, res) => {
   try {
@@ -87,4 +82,3 @@ export const suggestController = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-

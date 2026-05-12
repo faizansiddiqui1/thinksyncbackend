@@ -20,7 +20,13 @@ import * as mediaService from "../../services/spaceMedia.service.js";
 
 export const createSpace = async (req, res) => {
   try {
-    const space = await serviceCreateSpace(req.body, req.user?.id || null);
+    const tenant = req.context?.tenant || null;
+
+    const space = await serviceCreateSpace(
+      req.body,
+      req.user?.id || null,
+      tenant,
+    );
     if (!space) {
       // service did not return object (likely failed)
       return res
@@ -273,7 +279,7 @@ export const deleteSpace = async (req, res) => {
 export const getSpacesList = async (req, res) => {
   try {
     console.log("Runned Space list");
-    
+
     const query = {
       page: req.query.page,
       limit: req.query.limit,
@@ -304,12 +310,10 @@ export const getSpacesList = async (req, res) => {
   }
 };
 
-
 export const getSpaceDetailsBySlug = async (req, res) => {
   try {
-
     console.log("runned get space slug");
-    
+
     const { slug } = req.params;
 
     if (!slug || typeof slug !== "string") {
@@ -321,22 +325,14 @@ export const getSpaceDetailsBySlug = async (req, res) => {
 
     const data = await fetchSpaceDetailsBySlug(slug);
 
-    
-
     return res.status(200).json({
       success: true,
       data,
     });
   } catch (err) {
-    console.error(
-      "[getSpaceDetailsBySlug]",
-      err
-    );
+    console.error("[getSpaceDetailsBySlug]", err);
 
-    if (
-      err.message &&
-      /not found/i.test(err.message)
-    ) {
+    if (err.message && /not found/i.test(err.message)) {
       return res.status(404).json({
         success: false,
         error: err.message,
@@ -345,14 +341,10 @@ export const getSpaceDetailsBySlug = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error:
-        err.message || "Internal server error",
+      error: err.message || "Internal server error",
     });
   }
 };
-
-
-
 
 // Super admin
 export const searchSpacesController = async (req, res) => {

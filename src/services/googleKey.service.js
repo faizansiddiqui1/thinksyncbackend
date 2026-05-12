@@ -18,4 +18,5 @@ export const getGoogleApiKey = (tenantId = null) => {
     }
   }
   return process.env.GOOGLE_API_KEY || null;
-};
+} 
+  
