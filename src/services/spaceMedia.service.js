@@ -21,6 +21,20 @@ const ensureSpaceExists = async (spaceId) => {
   return space;
 };
 
+const ensureCityExists = async (cityId) => {
+  if (!mongoose.Types.ObjectId.isValid(cityId)) {
+    throw new Error("Invalid city id");
+  }
+
+  const city = await City.findById(cityId).select("_id");
+
+  if (!city) {
+    throw new Error("City not found");
+  }
+
+  return city;
+};
+
 export const getOrCreateMedia = async (spaceId, userId = null) => {
   let media = await SpaceMedia.findOne({ space: spaceId });
   if (!media) {
@@ -63,6 +77,9 @@ export const getPresignForImage = async (
     seating_option: (id) => `seating-options/${id}/images`,
     kyc: (id) => `kyc/${id}`,
     user: (id) => `users/${id}/avatar`,
+
+    city_document: (id) => `documents/cities/${id}`,
+    space_document: (id) => `documents/spaces/${id}`,
   };
 
   if (!folderMap[entity]) {
@@ -75,6 +92,12 @@ export const getPresignForImage = async (
 
   if (entity === "seating_option") {
     await ensureSeatingOptionExists(entityId);
+  }
+  if (entity === "space_document" || entity === "space") {
+    await ensureSpaceExists(entityId);
+  }
+  if (entity === "city_document") {
+    await ensureCityExists(entityId);
   }
   if (entity === "kyc" && userId && String(entityId) !== String(userId)) {
     throw new Error("You can upload only your own KYC");
