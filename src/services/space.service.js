@@ -496,7 +496,18 @@ const buildCardPayload = ({
     // =====================================================
 
     amenities: Array.isArray(space.amenities)
-      ? space.amenities.slice(0, 6)
+      ? space.amenities
+          .filter(
+            (amenity) =>
+              amenity?.isHighlighted === true || amenity?.isPremium === true,
+          )
+          .filter(
+            (item, index, self) =>
+              index ===
+              self.findIndex(
+                (a) => a?.key === item?.key || a?.label === item?.label,
+              ),
+          )
       : [],
 
     // =====================================================
@@ -947,6 +958,7 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
       slug,
       isPublished: true,
     })
+      .populate("address.city", "name slug")
       .lean()
       .exec();
 

@@ -62,7 +62,10 @@ const validatePayload = (data, { isUpdate = false } = {}) => {
     throw err;
   }
 
-  if (data.durationMonths && !VALID_DURATIONS.includes(Number(data.durationMonths))) {
+  if (
+    data.durationMonths &&
+    !VALID_DURATIONS.includes(Number(data.durationMonths))
+  ) {
     const err = new Error("Invalid durationMonths. Use 12, 24, or 36");
     err.status = 400;
     throw err;
@@ -101,6 +104,7 @@ const normalizeCreatePayload = (data) => {
       total,
       currency: data.price?.currency || "INR",
     },
+    whatYouGet: Array.isArray(data.whatYouGet) ? data.whatYouGet : [],
     inclusions: Array.isArray(data.inclusions) ? data.inclusions : [],
     features: Array.isArray(data.features) ? data.features : [],
     popular: Boolean(data.popular),
@@ -133,11 +137,14 @@ const normalizeUpdatePayload = (data, existingPlan) => {
     ...(data.category ? { category: data.category } : {}),
     ...(data.title ? { title: data.title } : {}),
     ...(data.durationMonths ? { durationMonths } : {}),
+    ...(data.whatYouGet ? { whatYouGet: data.whatYouGet } : {}),
     ...(data.inclusions ? { inclusions: data.inclusions } : {}),
     ...(data.features ? { features: data.features } : {}),
     ...(data.popular !== undefined ? { popular: Boolean(data.popular) } : {}),
     ...(data.order !== undefined ? { order: Number(data.order) } : {}),
-    ...(data.isActive !== undefined ? { isActive: Boolean(data.isActive) } : {}),
+    ...(data.isActive !== undefined
+      ? { isActive: Boolean(data.isActive) }
+      : {}),
     ...(data.updatedBy ? { updatedBy: data.updatedBy } : {}),
     price: {
       monthly: monthly ?? existingPlan.price?.monthly ?? 0,

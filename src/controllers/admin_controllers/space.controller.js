@@ -276,6 +276,7 @@ export const deleteSpace = async (req, res) => {
 // User side
 // ===================================================
 
+// Get space list only for space card based filtered data
 export const getSpacesList = async (req, res) => {
   try {
     console.log("Runned Space list");
@@ -310,6 +311,7 @@ export const getSpacesList = async (req, res) => {
   }
 };
 
+// Get space full data by slug for details page
 export const getSpaceDetailsBySlug = async (req, res) => {
   try {
     console.log("runned get space slug");
