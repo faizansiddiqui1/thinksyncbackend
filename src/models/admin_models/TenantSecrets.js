@@ -60,6 +60,11 @@ const TenantSecretsSchema = new Schema(
       country: String,
       templateId: String,
     },
+    hardware: {
+      provider: String,
+      apiKey: String,
+      secret: String,
+    },
 
     updatedAt: Date,
   },

@@ -1,6 +1,6 @@
-// src/services/paymentGatewayResolver.service.js
-
 import PaymentGateway from "../models/admin_models/paymentGateway.model.js";
+import AdminProfile from "../models/admin_models/AdminProfile.js";
+import Tenant from "../models/admin_models/tenant.model.js";
 import { decrypt } from "../utils/crypto.util.js";
 
 function getPlatformGateway() {
@@ -28,38 +28,42 @@ function getPlatformGateway() {
   };
 }
 
-export async function resolveGateway(tenantId) {
-  // ✅ NO TENANT → platform
-  if (!tenantId) {
+export async function resolveGateway(ownerId) {
+  if (!ownerId) return getPlatformGateway();
+
+  const adminProfile = await AdminProfile.findOne({ owner: ownerId }).lean();
+  if (!adminProfile || adminProfile.whiteLabel?.status !== "approved") {
     return getPlatformGateway();
   }
 
+  const request = adminProfile.whiteLabel?.request || {};
+
+  // Only when paymentMode is own_gateway use tenant gateway
+  if (request.paymentMode !== "own_gateway") {
+    return getPlatformGateway();
+  }
+
+  const tenant = await Tenant.findOne({ ownerId }).select("_id").lean();
+  if (!tenant) return getPlatformGateway();
+
   const record = await PaymentGateway.findOne({
-    tenantId,
+    tenantId: tenant._id,
     active: true,
   }).lean();
 
-  // ❌ no tenant config → fallback platform
-  if (!record) {
-    return getPlatformGateway();
-  }
+  if (!record) return getPlatformGateway();
 
-  // 🔐 decrypt creds
   const creds = {};
   for (const [k, v] of Object.entries(record.credentials || {})) {
-    try {
-      creds[k] =
-        typeof v === "string" && v.startsWith("enc:")
-          ? decrypt(v.slice(4))
-          : v;
-    } catch {
-      creds[k] = v;
-    }
+    creds[k] =
+      typeof v === "string" && v.startsWith("enc:")
+        ? decrypt(v.slice(4))
+        : v;
   }
 
   return {
     source: "tenant",
-    gateway: record.gateway, // razorpay OR cashfree
+    gateway: record.gateway,
     credentials: creds,
   };
 }

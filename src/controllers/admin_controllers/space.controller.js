@@ -346,7 +346,7 @@ export const getSpaceDetailsBySlug = async (req, res) => {
       error: err.message || "Internal server error",
     });
   }
-};
+};  
 
 // Super admin
 export const searchSpacesController = async (req, res) => {

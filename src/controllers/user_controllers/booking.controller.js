@@ -12,7 +12,6 @@ export const createBooking = async (req, res) => {
 
     console.log("Booking payload cheack", req.body);
     
-
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });

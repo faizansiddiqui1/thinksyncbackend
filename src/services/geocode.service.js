@@ -7,8 +7,7 @@ import { getCredentials } from "./credentialResolver.js";
    CONSTANTS
 ========================= */
 
-const GEOCODE_URL =
-  "https://maps.googleapis.com/maps/api/geocode/json";
+const GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
 
 /* =========================
    Helpers
@@ -47,11 +46,7 @@ function ensureKey(apiKey) {
    Reverse Geocode
 ========================= */
 
-export const reverseGeocode = async (
-  lat,
-  lng,
-  { tenant } = {}
-) => {
+export const reverseGeocode = async (lat, lng, { tenant } = {}) => {
   const { apiKey } = await resolveGoogleMaps(tenant);
 
   ensureKey(apiKey);
@@ -66,30 +61,62 @@ export const reverseGeocode = async (
     });
 
     const result = res.data.results?.[0];
+
     if (!result) return {};
 
     const comps = result.address_components || [];
 
+    const locality =
+      find(comps, "sublocality_level_1") ||
+      find(comps, "sublocality") ||
+      find(comps, "neighborhood") ||
+      "";
+
+    // ✅ INDIA FIX
+    const district =
+      find(comps, "administrative_area_level_3") ||
+      find(comps, "administrative_area_level_2") ||
+      "";
+
+    const city = find(comps, "locality") || find(comps, "postal_town") || "";
+
+    const state = find(comps, "administrative_area_level_1") || "";
+
+    const country = find(comps, "country") || "";
+
+    const pincode = find(comps, "postal_code") || "";
+
     const street =
       [find(comps, "street_number"), find(comps, "route")]
         .filter(Boolean)
-        .join(" ") ||
+        .join(" ")
+        .trim() ||
       find(comps, "premise") ||
-      result.formatted_address;
+      locality ||
+      result.formatted_address ||
+      "";
 
     return {
       formatted_address: result.formatted_address || "",
+
       street,
-      city:
-        find(comps, "locality") ||
-        find(comps, "sublocality") ||
-        find(comps, "administrative_area_level_2") ||
-        "",
-      state: find(comps, "administrative_area_level_1") || "",
-      country: find(comps, "country") || "",
-      pincode: find(comps, "postal_code") || "",
+
+      locality,
+
+      district,
+
+      city,
+
+      state,
+
+      country,
+
+      pincode,
+
       lat: result.geometry?.location?.lat ?? null,
+
       lng: result.geometry?.location?.lng ?? null,
+
       address_components: comps,
     };
   } catch (err) {
@@ -106,12 +133,8 @@ export const reverseGeocode = async (
    Forward Geocode
 ========================= */
 
-export const forwardGeocode = async (
-  address,
-  { tenant } = {}
-) => {
-  const { apiKey, components } =
-    await resolveGoogleMaps(tenant);
+export const forwardGeocode = async (address, { tenant } = {}) => {
+  const { apiKey, components } = await resolveGoogleMaps(tenant);
 
   ensureKey(apiKey);
 
@@ -126,10 +149,7 @@ export const forwardGeocode = async (
     });
 
     // DEBUG
-    console.log(
-      "[GEOCODE RESPONSE]",
-      JSON.stringify(res.data, null, 2)
-    );
+    console.log("[GEOCODE RESPONSE]", JSON.stringify(res.data, null, 2));
 
     // =========================
     // GOOGLE STATUS CHECK
@@ -137,75 +157,54 @@ export const forwardGeocode = async (
 
     if (res.data.status !== "OK") {
       throw new Error(
-        res.data.error_message ||
-          `Google Geocode failed: ${res.data.status}`
+        res.data.error_message || `Google Geocode failed: ${res.data.status}`,
       );
     }
 
     const result = res.data.results?.[0];
 
     if (!result) {
-      throw new Error(
-        "No geocoding results found"
-      );
+      throw new Error("No geocoding results found");
     }
 
     const comps = result.address_components || [];
 
     return {
-      formatted_address:
-        result.formatted_address || "",
+      formatted_address: result.formatted_address || "",
 
       street:
-        [
-          find(comps, "street_number"),
-          find(comps, "route"),
-        ]
+        [find(comps, "street_number"), find(comps, "route")]
           .filter(Boolean)
-          .join(" ") ||
-        result.formatted_address,
+          .join(" ") || result.formatted_address,
 
       city:
         find(comps, "locality") ||
         find(comps, "sublocality") ||
-        find(
-          comps,
-          "administrative_area_level_2"
-        ) ||
+        find(comps, "administrative_area_level_2") ||
         "",
 
-      state:
-        find(
-          comps,
-          "administrative_area_level_1"
-        ) || "",
+      state: find(comps, "administrative_area_level_1") || "",
 
-      country:
-        find(comps, "country") || "",
+      country: find(comps, "country") || "",
 
-      pincode:
-        find(comps, "postal_code") || "",
+      pincode: find(comps, "postal_code") || "",
 
-      lat:
-        result.geometry?.location?.lat ??
-        null,
+      lat: result.geometry?.location?.lat ?? null,
 
-      lng:
-        result.geometry?.location?.lng ??
-        null,
+      lng: result.geometry?.location?.lng ?? null,
 
       address_components: comps,
     };
   } catch (err) {
     console.error(
       "[FORWARD GEOCODE ERROR]",
-      err?.response?.data || err.message
+      err?.response?.data || err.message,
     );
 
     throw new Error(
       err?.response?.data?.error_message ||
         err?.message ||
-        "Forward geocode failed"
+        "Forward geocode failed",
     );
   }
 };

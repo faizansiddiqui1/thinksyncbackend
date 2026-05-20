@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+
 const { Schema } = mongoose;
 
 const amenitySchema = new Schema(
@@ -31,17 +32,20 @@ const resourceSchema = new Schema(
       ref: "Space",
       required: true,
       index: true,
-    }, // link to Space
-    name: { type: String, required: true, trim: true },
+    },
 
-    foodPrice: { type: Number, trim: true },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
     type: {
       type: String,
       enum: [
         "meeting_room",
         "private_cabin",
         "conference_room",
-        "food",
         "lounge",
         "open_space",
         "informal_area",
@@ -49,6 +53,7 @@ const resourceSchema = new Schema(
       ],
       required: true,
     },
+
     images: [imageSchema],
 
     prices: {
@@ -66,19 +71,33 @@ const resourceSchema = new Schema(
       bufferMinutes: { type: Number, default: 0 },
     },
 
-    currency: { type: String, default: "INR" },
+    currency: {
+      type: String,
+      default: "INR",
+    },
 
-    isActive: { type: Boolean, default: true },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+
     displayOrder: {
       type: Number,
       default: 0,
     },
+
     description: {
       type: String,
       default: "",
     },
+
     capacity: {
-      min: { type: Number, required: true, min: 1 },
+      min: {
+        type: Number,
+        required: true,
+        min: 1,
+      },
+
       max: {
         type: Number,
         required: true,
@@ -92,6 +111,7 @@ const resourceSchema = new Schema(
     },
 
     area: Number,
+
     amenities: [amenitySchema],
   },
   {
@@ -99,7 +119,6 @@ const resourceSchema = new Schema(
   },
 );
 
-// helpful index for queries by space + active
 resourceSchema.index({ space: 1, isActive: 1 });
 resourceSchema.index({ "prices.hourly": 1 });
 

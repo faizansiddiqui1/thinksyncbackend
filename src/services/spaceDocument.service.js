@@ -103,25 +103,53 @@ export const addDocument = async (
         }
       : null;
 
+  const VALID_SOLUTIONS = [
+    "company_registration",
+    "gst_registration",
+    "business_address",
+  ];
+
+  const solutionTypes = Array.isArray(body.solutionTypes)
+    ? [
+        ...new Set(
+          body.solutionTypes.filter((item) => VALID_SOLUTIONS.includes(item)),
+        ),
+      ]
+    : [];
+
+  if (!solutionTypes.length) {
+    throw new Error("solutionTypes required");
+  }
+
   const payload = {
     scopeType,
     city: scopeType === "CITY" ? scopeId : undefined,
     space: scopeType === "SPACE" ? scopeId : undefined,
+
     documentType: body.documentType || null,
     customType: body.customType || "",
     documentKey,
+
     label: body.label,
+
     status: incomingStatus,
+
     file,
+
     note: body.note || "",
+
+    solutionTypes,
+
     isPlatformSample:
       typeof body.isPlatformSample === "boolean"
         ? body.isPlatformSample
         : scopeType === "CITY",
+
     isWorkspaceSample:
       typeof body.isWorkspaceSample === "boolean"
         ? body.isWorkspaceSample
         : scopeType === "SPACE",
+
     uploadedBy: userId || undefined,
     updatedBy: userId || undefined,
     isActive: true,
@@ -148,7 +176,11 @@ export const addDocument = async (
 /* =========================
    DELETE
 ========================= */
-export const deleteDocument = async (documentId, userId = null, tenant = null) => {
+export const deleteDocument = async (
+  documentId,
+  userId = null,
+  tenant = null,
+) => {
   if (!mongoose.Types.ObjectId.isValid(documentId)) {
     throw new Error("Invalid document id");
   }
@@ -190,14 +222,26 @@ export const getDocumentsByScope = async (scopeType, scopeId) => {
 ========================= */
 export const getEffectiveDocumentsBySpace = async (spaceId) => {
   const space = await ensureSpaceExists(spaceId);
-  const cityId = space.address.city;
+
+  const cityId = String(space.address.city);
 
   const docs = await SpaceDocument.find({
     isActive: true,
-    scopeType: { $in: ["CITY", "SPACE"] },
-    $or: [{ space: spaceId }, { city: cityId }],
+    $or: [
+      {
+        scopeType: "SPACE",
+        space: spaceId,
+      },
+      {
+        scopeType: "CITY",
+        city: cityId,
+      },
+    ],
   })
-    .sort({ createdAt: -1 })
+    .sort({
+      scopeType: -1,
+      createdAt: -1,
+    })
     .lean()
     .exec();
 

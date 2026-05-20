@@ -1,11 +1,10 @@
-// models/admin_models/AdminProfile.js
 import mongoose from "mongoose";
 const { Schema } = mongoose;
 
 const DocumentSchema = new Schema(
   {
-    key: String, // S3 key or storage ref
-    type: String, // passport, business_license, etc
+    key: String,
+    type: String,
     uploadedAt: Date,
     status: {
       type: String,
@@ -14,7 +13,7 @@ const DocumentSchema = new Schema(
     },
     meta: Schema.Types.Mixed,
   },
-  { _id: false },
+  { _id: false }
 );
 
 const KycSchema = new Schema({
@@ -23,40 +22,6 @@ const KycSchema = new Schema({
     enum: ["not_submitted", "pending", "approved", "rejected"],
     default: "not_submitted",
   },
-
-  // 👇 ADD THIS BLOCK
-  // config: {
-  //   requireFaceMatch: { type: Boolean, default: true },
-  //   requirePan: { type: Boolean, default: true },
-  //   requireCin: { type: Boolean, default: true },
-  //   requireVideoKyc: { type: Boolean, default: true },
-  //   requireBankCheack: { type: Boolean, default: true },
-  //   requireGstin: { type: Boolean, default: true }
-  // },
-
-  /**  ===================================================
-  Direct  add in db in under adminProfile
-  adminprofiles
-  ADD DATA → Insert Document
-  Paste this ⬇️⬇️⬇️
-
-{
-  "owner": null,
-  "company": { "name": "GLOBAL_DEFAULT" },
-  "kyc": {
-    "config": {
-      "requirePan": true,
-      "requireGstin": true,
-      "requireCin": true,
-      "requireCompanyPan": true,
-      "requireBankCheck": true,
-      requireAadhaar: true,
-      "requireFaceMatch": false
-    }
-  }
-}
-=================================================== */
-
   submittedAt: Date,
   reviewedAt: Date,
   reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -72,41 +37,145 @@ const AdminProfileSchema = new Schema(
       required: true,
       unique: true,
     },
+
     company: {
       name: String,
       registrationNumber: String,
       address: String,
-      placeholderImageKey: String, // for pictures
+      placeholderImageKey: String,
       legalDocuments: [DocumentSchema],
     },
-    // models/admin_models/AdminProfile.js
 
     whiteLabel: {
       status: {
         type: String,
-        enum: ["pending", "approved", "rejected"],
-        default: "pending",
+        enum: ["none", "pending", "approved", "rejected"],
+        default: "none",
       },
-      requestedDomain: String, // 🔥 ADD THIS
+
+      request: {
+        personalBranding: {
+          type: Boolean,
+          default: false,
+        },
+
+        needsCustomDomain: {
+          type: Boolean,
+          default: false,
+        },
+
+        requestedDomain: {
+          type: String,
+          default: null,
+        },
+
+        wantsFullCustomization: {
+          type: Boolean,
+          default: false,
+        },
+
+        paymentMode: {
+          type: String,
+          enum: ["platform", "own_gateway"],
+          default: "platform",
+        },
+
+        useOwnCredentials: {
+          type: Boolean,
+          default: false,
+        },
+
+        needsHardwareAccess: {
+          type: Boolean,
+          default: false,
+        },
+
+        businessName: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        businessAge: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        contactName: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        contactPhone: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        needsGuidance: {
+          type: Boolean,
+          default: false,
+        },
+
+        notes: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        submittedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+
+      domain: {
+        requestedDomain: String,
+        activeDomain: String,
+        verified: {
+          type: Boolean,
+          default: false,
+        },
+        dnsConfigured: {
+          type: Boolean,
+          default: false,
+        },
+      },
 
       approvedAt: Date,
+
       approvedBy: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "User", // super admin
+        ref: "User",
       },
 
-      // 🔥 ADD THIS
-      usePlatformCredentials: {
-        type: Boolean,
-        default: false, // default platform creds use karega
+      permissions: {
+        customDomain: {
+          type: Boolean,
+          default: false,
+        },
+        customBranding: {
+          type: Boolean,
+          default: false,
+        },
+        privateMode: {
+          type: Boolean,
+          default: false,
+        },
+      },
+
+      marketplaceMode: {
+        type: String,
+        enum: ["marketplace", "private"],
+        default: "marketplace",
       },
     },
 
     kyc: { type: KycSchema, default: () => ({}) },
-    createdAt: Date,
-    updatedAt: Date,
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 AdminProfileSchema.index(
@@ -114,7 +183,7 @@ AdminProfileSchema.index(
   {
     unique: true,
     partialFilterExpression: { "company.name": "GLOBAL_DEFAULT" },
-  },
+  }
 );
 
 AdminProfileSchema.pre("deleteOne", { document: true }, function (next) {

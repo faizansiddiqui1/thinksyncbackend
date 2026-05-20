@@ -10,6 +10,7 @@ import {
   resolveAwsConfig,
 } from "../config/s3.js";
 import SeatingOption from "../models/admin_models/SeatingOption.js";
+import Addon from "../models/admin_models/AddonSchema.js";
 
 const ensureSpaceExists = async (spaceId) => {
   if (!mongoose.Types.ObjectId.isValid(spaceId)) {
@@ -33,6 +34,20 @@ const ensureCityExists = async (cityId) => {
   }
 
   return city;
+};
+
+const ensureAddonExists = async (addonId) => {
+  if (!mongoose.Types.ObjectId.isValid(addonId)) {
+    throw new Error("Invalid addon id");
+  }
+
+  const addon = await Addon.findById(addonId).select("_id");
+
+  if (!addon) {
+    throw new Error("Addon not found");
+  }
+
+  return addon;
 };
 
 export const getOrCreateMedia = async (spaceId, userId = null) => {
@@ -74,6 +89,7 @@ export const getPresignForImage = async (
   const folderMap = {
     space: (id) => `spaces/${id}/images`,
     resource: (id) => `spaces/${id}/resources`,
+    addon: (id) => `addons/${id}/images`,
     seating_option: (id) => `seating-options/${id}/images`,
     kyc: (id) => `kyc/${id}`,
     user: (id) => `users/${id}/avatar`,
@@ -88,6 +104,10 @@ export const getPresignForImage = async (
 
   if (entity === "space" || entity === "resource") {
     await ensureSpaceExists(entityId);
+  }
+
+  if (entity === "addon") {
+    await ensureAddonExists(entityId);
   }
 
   if (entity === "seating_option") {

@@ -107,6 +107,13 @@ const spaceDocumentSchema = new Schema(
       index: true,
     },
 
+    solutionTypes: [
+      {
+        type: String,
+        enum: ["company_registration", "gst_registration", "business_address"],
+      },
+    ],
+
     /* -------------------------
        DOCUMENT LABEL
     ------------------------- */
@@ -235,13 +242,8 @@ spaceDocumentSchema.pre("validate", function (next) {
   ------------------------- */
 
   // file required only when available
-  if (
-    this.status === "AVAILABLE" &&
-    (!this.file || !this.file.url)
-  ) {
-    return next(
-      new Error("file is required when status is AVAILABLE"),
-    );
+  if (this.status === "AVAILABLE" && (!this.file || !this.file.url)) {
+    return next(new Error("file is required when status is AVAILABLE"));
   }
 
   next();
@@ -285,7 +287,4 @@ spaceDocumentSchema.index(
   },
 );
 
-export default mongoose.model(
-  "SpaceDocument",
-  spaceDocumentSchema,
-);
+export default mongoose.model("SpaceDocument", spaceDocumentSchema);

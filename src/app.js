@@ -34,6 +34,10 @@ import CityRoutes from "./routes/City.routes.js"
 
 import SeatingOption from "./routes/seatingOption.routes.js"
 
+import DocumentsRoutes from "./routes/spaceDocument.routes.js"
+
+import AddonRoutes from "./routes/addon.routes.js"
+
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
 
@@ -148,6 +152,11 @@ app.use("/api/virtual-office-plans", virtualOfficeRoutes);
 app.use("/api/location", CityRoutes)
 
 app.use("/api/seatingOption", SeatingOption);
+
+app.use("/api/addon", AddonRoutes)
+
+// Vertual office documetns
+app.use("/api/documents", DocumentsRoutes)
 
 // white label routes
 app.use("/api/whitelabel", whiteLabelRoutes);

@@ -120,19 +120,22 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
 
       // normalize response (adapt if your cashfreeService shape differs)
       gatewayOrderId =
-        cfResp?.orderId ||
-        cfResp?.paymentSessionId ||
-        cfResp?.data?.orderId ||
-        internalBookingId;
+        cfResp?.order_id || cfResp?.data?.order_id || internalBookingId;
+
+      console.log("CF RESPONSE:", cfResp);
 
       normalizedPaymentData = {
-        orderId: gatewayOrderId,
+        orderId:
+          cfResp?.order_id || cfResp?.data?.order_id || internalBookingId,
+
         payment_session_id:
-          cfResp?.paymentSessionId ||
-          cfResp?.data?.paymentSessionId ||
-          gatewayOrderId,
+          cfResp?.payment_session_id || cfResp?.data?.payment_session_id,
+
         raw: cfResp,
       };
+      if (!normalizedPaymentData.payment_session_id) {
+        throw new Error("Cashfree payment_session_id missing");
+      }
     } else if (gatewayName === "razorpay") {
       const instance = razorpayService.createRazorpayInstance(
         gatewayResolved.credentials,
@@ -151,6 +154,7 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       }
 
       gatewayOrderId = razorpayOrder.id;
+
       normalizedPaymentData = {
         orderId: gatewayOrderId,
         payment_session_id: gatewayOrderId,
@@ -210,6 +214,9 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     return { success: false, error: error.message || String(error) };
   }
 };
+
+
+
 
 export const getOwnerBookings = async (ownerId, filters = {}) => {
   try {

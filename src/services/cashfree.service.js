@@ -11,7 +11,7 @@ function baseUrl(env) {
 export async function createCashfreeOrder({
   credentials,
   orderId,
-  amount,
+  amount,  
   currency = "INR",
   customer = {},
 }) {

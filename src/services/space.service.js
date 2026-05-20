@@ -13,6 +13,10 @@ import { normalizePagination, metaFor } from "../utils/pagination.js";
 import ResourceSchema from "../models/admin_models/ResourceSchema.js";
 import mongoose from "mongoose";
 import { forwardGeocode } from "./geocode.service.js";
+import SpaceDocument from "../models/admin_models/SpaceDocument.js";
+
+import { getEffectiveDocumentsBySpace } from "./spaceDocument.service.js";
+import Addon from "../models/admin_models/AddonSchema.js";
 
 const ALLOWED_FIELDS = [
   "name",
@@ -975,6 +979,7 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
       media,
       virtualOfficePlans,
       seatingOptions,
+      addons,
     ] = await Promise.all([
       ResourceSchema.find({
         space: spaceId,
@@ -1023,7 +1028,20 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
         })
         .lean()
         .exec(),
+
+      Addon.find({
+        space: spaceId,
+        isActive: true,
+      })
+        .sort({
+          displayOrder: 1,
+          createdAt: -1,
+        })
+        .lean()
+        .exec(),
     ]);
+
+    const documents = await getEffectiveDocumentsBySpace(spaceId);
 
     const normalizedMedia = media || {
       images: [],
@@ -1052,6 +1070,8 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
       media: normalizedMedia,
       virtualOfficePlans: groupedVirtualOfficePlans || {},
       seatingOptions: seatingOptions || [],
+      addons: addons || [],
+      documents: documents || [],
     };
   } catch (error) {
     console.error("[fetchSpaceDetailsBySlug]", error);

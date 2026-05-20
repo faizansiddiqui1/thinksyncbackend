@@ -9,6 +9,14 @@ const { Schema } = mongoose;
 const addressSchema = new Schema(
   {
     street: { type: String, required: true, trim: true },
+    locality: {
+      type: String,
+      trim: true,
+    },
+    district: {
+      type: String,
+      trim: true,
+    },
     city: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "City",
@@ -105,7 +113,7 @@ const amenitySchema = new Schema(
       default: 0,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* =========================
@@ -441,6 +449,18 @@ spaceSchema.virtual("pricingPlans", {
 
 spaceSchema.virtual("offers", {
   ref: "Offer",
+  localField: "_id",
+  foreignField: "space",
+});
+
+spaceSchema.virtual("documents", {
+  ref: "SpaceDocument",
+  localField: "_id",
+  foreignField: "space",
+});
+
+spaceSchema.virtual("addons", {
+  ref: "Addon",
   localField: "_id",
   foreignField: "space",
 });

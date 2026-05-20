@@ -115,18 +115,24 @@ export const placeDetailsController = async (req, res) => {
     return res.json({
       status: data.status || "UNKNOWN",
 
-      address:
-        result.formatted_address ||
-        structured.formatted_address ||
-        "",
+      address: result.formatted_address || structured.formatted_address || "",
 
       street: structured.street || "",
+
+      locality: structured.locality || "",
+
+      district: structured.district || "",
+
       city: structured.city || "",
+
       state: structured.state || "",
+
       pincode: structured.pincode || "",
+
       country: structured.country || "",
 
       lat: location?.lat ?? null,
+
       lng: location?.lng ?? null,
 
       address_components: structured.address_components || [],
