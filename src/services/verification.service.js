@@ -45,8 +45,11 @@ function getS3Client(aws) {
   return client;
 }
 
-async function isFaceMatchRequired(userId) {
-  const admin = await AdminProfile.findOne({ owner: userId }).lean();
+async function isFaceMatchRequired() {
+  const admin = await AdminProfile.findOne({
+    "company.name": "GLOBAL_DEFAULT",
+  }).lean();
+
   return admin?.kyc?.config?.requireFaceMatch === true;
 }
 
@@ -91,7 +94,7 @@ async function getBufferFromS3(key, tenant) {
 
 // FINAL KYC DECISION
 export async function getFinalKycStatus(user) {
-  const requireFace = await isFaceMatchRequired(user._id);
+  const requireFace = await isFaceMatchRequired();
 
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
   const panOk = user?.kyc?.pan?.status === "verified";

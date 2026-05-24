@@ -21,6 +21,8 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       plan,
       quantity,
       resources = [],
+      addons = [],
+
       couponCode: rawCouponCode, // optional
     } = bookingData;
 
@@ -215,8 +217,6 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
   }
 };
 
-
-
 function normalizeKycStatus(status) {
   const raw = String(status || "").toLowerCase();
 
@@ -340,7 +340,9 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
 
       const startMs = startDateTime.getTime() - now.getTime();
       const endMs = endDateTime.getTime() - now.getTime();
-      const holdMs = holdExpiresAt ? holdExpiresAt.getTime() - now.getTime() : null;
+      const holdMs = holdExpiresAt
+        ? holdExpiresAt.getTime() - now.getTime()
+        : null;
 
       return {
         ...b,
@@ -348,7 +350,8 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
           ...b.user,
           name: b?.user?.userId?.username || b?.user?.name || "-",
           email: b?.user?.userId?.email || b?.user?.email || "-",
-          phoneNumber: b?.user?.userId?.phoneNumber || b?.user?.phoneNumber || "-",
+          phoneNumber:
+            b?.user?.userId?.phoneNumber || b?.user?.phoneNumber || "-",
           kycStatus: rawKycStatus,
           kycCompleted: isKycCompleted(rawKycStatus),
           kycNormalizedStatus: normalizedKyc,
@@ -374,16 +377,27 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
     // 6) Stats on ALL owner bookings matching booking filters (before KYC filter)
     const stats = {
       totalBookings: enriched.length,
-      kycCompleted: enriched.filter((b) => isKycCompleted(b.user?.kycStatus)).length,
+      kycCompleted: enriched.filter((b) => isKycCompleted(b.user?.kycStatus))
+        .length,
       kycNotCompleted: enriched.filter(
         (b) => !isKycCompleted(b.user?.kycStatus),
       ).length,
       byKycStatus: {
-        verified: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "verified").length,
-        pending: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "pending").length,
-        not_submitted: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "not_submitted").length,
-        awaiting_selfie: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "awaiting_selfie").length,
-        rejected: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "rejected").length,
+        verified: enriched.filter(
+          (b) => String(b.user?.kycStatus).toLowerCase() === "verified",
+        ).length,
+        pending: enriched.filter(
+          (b) => String(b.user?.kycStatus).toLowerCase() === "pending",
+        ).length,
+        not_submitted: enriched.filter(
+          (b) => String(b.user?.kycStatus).toLowerCase() === "not_submitted",
+        ).length,
+        awaiting_selfie: enriched.filter(
+          (b) => String(b.user?.kycStatus).toLowerCase() === "awaiting_selfie",
+        ).length,
+        rejected: enriched.filter(
+          (b) => String(b.user?.kycStatus).toLowerCase() === "rejected",
+        ).length,
       },
       confirmed: enriched.filter((b) => b.status === "confirmed").length,
       pending: enriched.filter((b) => b.status === "pending").length,
@@ -392,7 +406,8 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       expired: enriched.filter((b) => b.status === "expired").length,
       upcoming: enriched.filter((b) => b.startDateTime > now).length,
       active: enriched.filter(
-        (b) => new Date(b.startDateTime) <= now && new Date(b.endDateTime) >= now,
+        (b) =>
+          new Date(b.startDateTime) <= now && new Date(b.endDateTime) >= now,
       ).length,
     };
 
@@ -430,9 +445,6 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
   }
 };
 
-
-
-
 export const getMyBookings = async (userId, filters = {}) => {
   try {
     const { status, upcoming, past, page = 1, limit = 20 } = filters;
@@ -458,6 +470,11 @@ export const getMyBookings = async (userId, filters = {}) => {
         path: "resources.resourceId",
         model: "Resource", // ✅ FIX (VERY IMPORTANT)
         select: "name type images",
+      })
+      .populate({
+        path: "addons.addonId",
+        model: "Addon",
+        select: "title type images",
       })
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -511,7 +528,17 @@ export const getMyBookingById = async (userId, bookingId) => {
       "user.userId": userId,
     })
       .populate("space")
-      .populate("user.userId");
+      .populate("user.userId")
+      .populate({
+        path: "resources.resourceId",
+        model: "Resource",
+        select: "name type images",
+      })
+      .populate({
+        path: "addons.addonId",
+        model: "Addon",
+        select: "name type images",
+      });
 
     if (!booking) {
       return { success: false, error: "Booking not found" };

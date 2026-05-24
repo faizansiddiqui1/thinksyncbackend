@@ -11,6 +11,14 @@ import {
   getAdminKycDecision,
   getAdminKycStatusHandler,
   verifyCompanyPanHandler,
+  getUserKycStatusForAdmin,
+  verifyPanForUser,
+  verifyCompanyPanForUser,
+  verifyGstForUser,
+  verifyCinForUser,
+  verifyAadhaarOCRForUser,
+  verifyBankSyncForUser,
+  saveKycImageForUser,
 } from "../controllers/admin_controllers/verification.controller.js";
 import { requireAuth } from "../middlewares/auth.js";
 
@@ -50,5 +58,36 @@ router.get("/kyc/status", requireAuth, getKycStatus);
 
 // Super admin routes
 router.get("/kyc/admin/status", requireAuth, getAdminKycStatusHandler);
+
+// Admin review routes for target user KYC
+router.get(
+  "/admin/users/:userId/kyc/status",
+  requireAuth,
+  getUserKycStatusForAdmin,
+);
+router.post("/admin/users/:userId/verification/pan", requireAuth, verifyPanForUser);
+router.post(
+  "/admin/users/:userId/verification/company-pan",
+  requireAuth,
+  verifyCompanyPanForUser,
+);
+router.post("/admin/users/:userId/verification/gst", requireAuth, verifyGstForUser);
+router.post("/admin/users/:userId/verification/cin", requireAuth, verifyCinForUser);
+router.post(
+  "/admin/users/:userId/verification/bank/sync",
+  requireAuth,
+  verifyBankSyncForUser,
+);
+router.post(
+  "/admin/users/:userId/verification/aadhaar/ocr",
+  requireAuth,
+  upload.single("file"),
+  verifyAadhaarOCRForUser,
+);
+router.post(
+  "/admin/users/:userId/kyc/save",
+  requireAuth,
+  saveKycImageForUser,
+);
 
 export default router;

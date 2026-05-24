@@ -129,6 +129,24 @@ export async function getAdminKycStatusHandler(req, res) {
   }
 }
 
+function ensureTargetUserId(req) {
+  const { userId } = req.params;
+  if (!userId) {
+    throw new ApiError(400, "Target userId is required");
+  }
+  return userId;
+}
+
+export async function getUserKycStatusForAdmin(req, res) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const data = await svc.buildUserKycPayload(userId);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
 export function getAdminKycDecision(companyVerification, config = {}, user) {
   if (!companyVerification) return "pending";
 
@@ -274,6 +292,71 @@ export async function verifyPanHandler(req, res, next) {
   }
 }
 
+export async function verifyPanForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const { pan, name } = req.body;
+
+    if (!pan) throw new ApiError(400, "PAN is required");
+
+    const v = await getOrCreate(userId);
+
+    if (v.pan?.status === "verified" && v.pan?.data?.pan === pan) {
+      return res.json({
+        success: true,
+        message: "PAN already verified for target user",
+        verified: true,
+        status: v.pan.status,
+      });
+    }
+
+    const { raw, verified } = await svc.verifyPan({
+      tenant,
+      pan,
+      name,
+    });
+
+    ensureField(v, "pan");
+    v.pan.status = verified ? "verified" : "rejected";
+    v.pan.data = raw;
+
+    await v.save();
+
+    const user = await User.findById(userId);
+    if (user) {
+      if (!user.kyc) user.kyc = {};
+
+      user.kyc.pan = {
+        status: verified ? "verified" : "rejected",
+        data: raw,
+        uploadedAt: new Date(),
+      };
+
+      user.kyc.status = await svc.getFinalKycStatus(user);
+      await user.save();
+    }
+
+    await updateAdminKyc(userId);
+
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter correct Individual PAN number",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "PAN verification completed for user",
+      verified,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** Company PAN */
 export async function verifyCompanyPanHandler(req, res, next) {
   try {
@@ -318,6 +401,57 @@ export async function verifyCompanyPanHandler(req, res, next) {
     return res.json({
       success: true,
       message: "Company PAN verification completed",
+      verified,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function verifyCompanyPanForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const { pan, name } = req.body;
+
+    if (!pan) throw new ApiError(400, "Company PAN required");
+
+    const v = await getOrCreate(userId);
+    const panInput = String(pan).trim().toUpperCase();
+
+    const existingCompanyPan =
+      v.companyPan?.status === "verified"
+        ? v.companyPan?.data?.pan || v.companyPan?.data
+        : null;
+
+    if (
+      existingCompanyPan &&
+      String(existingCompanyPan).toUpperCase() === panInput
+    ) {
+      return res.json({
+        success: true,
+        message: "Company PAN already verified for user",
+        verified: true,
+      });
+    }
+
+    const { raw, verified } = await svc.verifyCompanyPan({
+      tenant,
+      pan: panInput,
+      name,
+    });
+
+    ensureField(v, "companyPan");
+    v.companyPan.status = verified ? "verified" : "rejected";
+    v.companyPan.data = raw;
+
+    await v.save();
+    await updateAdminKyc(userId);
+
+    return res.json({
+      success: true,
+      message: "Company PAN verification completed for user",
       verified,
       data: raw,
     });
@@ -376,6 +510,55 @@ export async function verifyGstHandler(req, res, next) {
   }
 }
 
+export async function verifyGstForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const { gstin } = req.body;
+
+    if (!gstin) throw new ApiError(400, "GSTIN is required");
+
+    const v = await getOrCreate(userId);
+
+    if (v.gst?.status === "verified" && v.gst?.data?.GSTIN === gstin) {
+      return res.json({
+        success: true,
+        message: "GST already verified for target user",
+        verified: true,
+        data: v.gst.status,
+      });
+    }
+
+    const { raw, verified } = await svc.verifyGstin({
+      tenant,
+      gstin,
+    });
+
+    ensureField(v, "gst");
+    v.gst.status = verified ? "verified" : "rejected";
+    v.gst.data = raw;
+
+    await v.save();
+    await updateAdminKyc(userId);
+
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: raw?.message || "Invalid GST number",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "GST verification completed for user",
+      verified,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** CIN */
 export async function verifyCinHandler(req, res, next) {
   try {
@@ -426,6 +609,55 @@ export async function verifyCinHandler(req, res, next) {
   }
 }
 
+export async function verifyCinForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const { cin } = req.body;
+
+    if (!cin) throw new ApiError(400, "CIN is required");
+
+    const v = await getOrCreate(userId);
+
+    if (v.cin?.status === "verified" && v.cin?.data?.cin === cin) {
+      return res.json({
+        success: true,
+        message: "CIN already verified for target user",
+        verified: true,
+        data: v.cin.status,
+      });
+    }
+
+    const { raw, verified } = await svc.verifyCin({
+      tenant,
+      cin,
+    });
+
+    ensureField(v, "cin");
+    v.cin.status = verified ? "verified" : "rejected";
+    v.cin.data = raw;
+
+    await v.save();
+    await updateAdminKyc(userId);
+
+    if (!verified) {
+      return res.status(400).json({
+        success: false,
+        message: raw?.message || "Invalid CIN number",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "CIN verification completed for user",
+      verified,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** Aadhaar OCR */
 export async function verifyAadhaarOCRHandler(req, res, next) {
   try {
@@ -464,6 +696,51 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
     return res.json({
       success: true,
       message: "Aadhaar verification completed",
+      verified,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function verifyAadhaarOCRForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const file = req.file;
+    const fileUrl = req.body.fileUrl || req.body.file_url;
+
+    if (!file && !fileUrl) {
+      throw new ApiError(400, "Aadhaar file or fileUrl required");
+    }
+
+    const v = await getOrCreate(userId);
+
+    let raw, verified;
+
+    if (file) {
+      const input = {
+        buffer: file.buffer,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+      };
+
+      ({ raw, verified } = await svc.verifyAadhaarOCR(input, { tenant }));
+    } else {
+      ({ raw, verified } = await svc.verifyAadhaarOCR(fileUrl, { tenant }));
+    }
+
+    ensureField(v, "aadhaar");
+    v.aadhaar.status = verified ? "verified" : "rejected";
+    v.aadhaar.data = raw;
+
+    await v.save();
+    await updateAdminKyc(userId);
+
+    return res.json({
+      success: true,
+      message: "Aadhaar verification completed for user",
       verified,
       data: raw,
     });
@@ -526,6 +803,59 @@ export async function verifyBankSyncHandler(req, res, next) {
   }
 }
 
+export async function verifyBankSyncForUser(req, res, next) {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const { bank_account, ifsc } = req.body;
+
+    if (!bank_account || !ifsc) {
+      throw new ApiError(400, "bank_account number and IFSC required");
+    }
+
+    const v = await getOrCreate(userId);
+
+    if (
+      v.bank?.status === "verified" &&
+      v.bank?.account === bank_account &&
+      v.bank?.ifsc === ifsc
+    ) {
+      return res.json({
+        success: true,
+        message: "Bank already verified for target user",
+        verified: true,
+        data: v.bank.data,
+      });
+    }
+
+    const { raw, verified } = await svc.verifyBankSync({
+      tenant,
+      account: bank_account,
+      ifsc,
+    });
+
+    ensureField(v, "bank");
+    v.bank.status = verified ? "verified" : "rejected";
+    v.bank.account = bank_account;
+    v.bank.ifsc = ifsc;
+    v.bank.data = raw;
+    v.bank.verifiedAt = new Date();
+
+    await v.save();
+    await updateAdminKyc(userId);
+
+    return res.json({
+      success: true,
+      message: "Bank verification completed for user",
+      verified,
+      bank_account,
+      data: raw,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export const getPresignForKycImage = async (req, res) => {
   try {
     const data = await svc.getPresignForKycImage(req.user._id, req.body);
@@ -555,12 +885,29 @@ export const saveKycImage = async (req, res) => {
   }
 };
 
+export const saveKycImageForUser = async (req, res) => {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+
+    const data = await svc.saveKycImage(
+      userId,
+      {
+        key: req.body.key,
+        type: req.body.type,
+      },
+      tenant,
+    );
+
+    res.json({ success: true, message: "Image saved for user", data });
+  } catch (e) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+};
+
 export const getKycStatus = async (req, res) => {
   try {
-    // target user from admin panel
-    const targetUserId = req.query.user || req.query.userId || req.user._id;
-
-    const data = await svc.buildUserKycPayload(targetUserId);
+    const data = await svc.buildUserKycPayload(req.user._id);
 
     res.json({
       success: true,

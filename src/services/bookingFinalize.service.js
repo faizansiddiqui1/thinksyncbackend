@@ -34,14 +34,48 @@ function normalizeResources(resources = []) {
 
   return resources
     .map((r) => {
-      const resourceId = r?.resourceId || r?.id || null;
+      const resourceId = r?.resourceId || r?._id || r?.id || null;
+
       if (!resourceId) return null;
 
       return {
         resourceId,
+
         name: r?.name || "",
+
         type: r?.type || "",
-        unitPrice: Number(r?.unitPrice || 0),
+
+        quantity: Number(r?.quantity || 1),
+
+        unitPrice: Number(r?.unitPrice || r?.price || 0),
+      };
+    })
+    .filter(Boolean);
+}
+
+
+
+
+function normalizeAddons(addons = []) {
+  if (!Array.isArray(addons)) return [];
+
+  return addons
+    .map((a) => {
+      const addonId = a?.addonId || a?._id || a?.id || null;
+
+      if (!addonId) return null;
+
+      return {
+        addonId,
+
+        // 🔥 IMPORTANT FIX
+        name: a?.name || a?.title || "",
+
+        type: a?.type || "",
+
+        quantity: Number(a?.quantity || 1),
+
+        unitPrice: Number(a?.unitPrice || a?.price || 0),
       };
     })
     .filter(Boolean);
@@ -88,6 +122,8 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     const user = bookingData.user || {};
     const normalizedResources = normalizeResources(bookingData.resources);
 
+    const normalizedAddons = normalizeAddons(bookingData.addons);
+
     const finalBookingDoc = {
       user: {
         userId: bookingData.user?.userId || bookingData.userId || null,
@@ -98,10 +134,11 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
 
       spaceType: bookingData.spaceType,
 
-      space: bookingData.space, 
+      space: bookingData.space,
 
-      // ✅ IMPORTANT: save only normalized resources
       resources: normalizedResources,
+
+      addons: normalizedAddons,
 
       plan: bookingData.plan,
       bookingType: bookingData.bookingType,
