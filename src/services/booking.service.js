@@ -217,11 +217,53 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
 
 
 
+function normalizeKycStatus(status) {
+  const raw = String(status || "").toLowerCase();
+
+  if (["verified", "approved", "completed"].includes(raw)) {
+    return "completed";
+  }
+
+  if (
+    [
+      "not_submitted",
+      "pending",
+      "awaiting_selfie",
+      "rejected",
+      "failed",
+      "",
+      "null",
+      "undefined",
+    ].includes(raw)
+  ) {
+    return "not_completed";
+  }
+
+  return raw;
+}
+
+function isKycCompleted(status) {
+  return normalizeKycStatus(status) === "completed";
+}
+
+function matchesKycFilter(rawStatus, filter) {
+  if (!filter || filter === "all") return true;
+
+  const raw = String(rawStatus || "").toLowerCase();
+  const normalized = normalizeKycStatus(raw);
+
+  if (filter === "completed") return normalized === "completed";
+  if (filter === "not_completed") return normalized === "not_completed";
+
+  // exact raw status filters like verified, pending, not_submitted, awaiting_selfie, rejected
+  return raw === filter;
+}
 
 export const getOwnerBookings = async (ownerId, filters = {}) => {
   try {
     const {
       status,
+      kycStatus = "all",
       page = 1,
       limit = 20,
       upcoming = false,
@@ -229,12 +271,11 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       active = false,
     } = filters;
 
-    const skip = (page - 1) * limit;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(Math.max(1, Number(limit) || 20), 100);
 
-    // 1) Find all spaces owned by this admin
-    const spaces = await Space.find({ owner: ownerId }).select(
-      "_id name owner",
-    );
+    // 1) Owner ke spaces
+    const spaces = await Space.find({ owner: ownerId }).select("_id").lean();
     const spaceIds = spaces.map((s) => s._id);
 
     if (!spaceIds.length) {
@@ -243,18 +284,21 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
         data: {
           bookings: [],
           stats: {
-            total: 0,
+            totalBookings: 0,
+            kycCompleted: 0,
+            kycNotCompleted: 0,
+            byKycStatus: {},
             confirmed: 0,
             pending: 0,
             cancelled: 0,
             completed: 0,
+            expired: 0,
             upcoming: 0,
             active: 0,
-            expired: 0,
           },
           pagination: {
-            page,
-            limit,
+            page: pageNum,
+            limit: limitNum,
             total: 0,
             pages: 0,
           },
@@ -262,64 +306,53 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       };
     }
 
-    // 2) Build query
+    // 2) Base booking query
     const now = new Date();
     const query = { space: { $in: spaceIds } };
 
     if (status) query.status = status;
-
-    if (upcoming) {
-      query.startDateTime = { $gt: now };
-    }
-
-    if (past) {
-      query.endDateTime = { $lt: now };
-    }
-
+    if (upcoming) query.startDateTime = { $gt: now };
+    if (past) query.endDateTime = { $lt: now };
     if (active) {
       query.startDateTime = { $lte: now };
       query.endDateTime = { $gte: now };
       query.status = { $in: ["confirmed", "pending", "pending_hold"] };
     }
 
-    const [bookings, total, allMatched] = await Promise.all([
-      Booking.find(query)
-        .populate("space", "name slug address owner")
-        .populate("user.userId", "username email phoneNumber")
-        .sort({ startDateTime: 1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Booking.countDocuments(query),
-      Booking.find(query).select(
-        "status startDateTime endDateTime holdExpiresAt",
-      ),
-    ]);
+    // 3) Booking list with populated user + space
+    const rawBookings = await Booking.find(query)
+      .populate("space", "name slug address owner")
+      .populate({
+        path: "user.userId",
+        select: "username email phoneNumber kyc.status",
+      })
+      .sort({ startDateTime: 1, createdAt: -1 })
+      .lean();
 
-    // 3) Stats for dashboard
-    const stats = {
-      total: allMatched.length,
-      confirmed: allMatched.filter((b) => b.status === "confirmed").length,
-      pending: allMatched.filter((b) => b.status === "pending").length,
-      cancelled: allMatched.filter((b) => b.status === "cancelled").length,
-      completed: allMatched.filter((b) => b.status === "completed").length,
-      expired: allMatched.filter((b) => b.status === "expired").length,
-      upcoming: allMatched.filter((b) => b.startDateTime > now).length,
-      active: allMatched.filter(
-        (b) => b.startDateTime <= now && b.endDateTime >= now,
-      ).length,
-    };
+    // 4) Enrich rows
+    const enriched = rawBookings.map((b) => {
+      const rawKycStatus = b?.user?.userId?.kyc?.status || "not_submitted";
+      const normalizedKyc = normalizeKycStatus(rawKycStatus);
 
-    // 4) Add timer fields for frontend
-    const enrichedBookings = bookings.map((b) => {
-      const obj = b.toObject();
-      const startMs = new Date(obj.startDateTime).getTime() - now.getTime();
-      const endMs = new Date(obj.endDateTime).getTime() - now.getTime();
-      const holdMs = obj.holdExpiresAt
-        ? new Date(obj.holdExpiresAt).getTime() - now.getTime()
-        : null;
+      const startDateTime = new Date(b.startDateTime);
+      const endDateTime = new Date(b.endDateTime);
+      const holdExpiresAt = b.holdExpiresAt ? new Date(b.holdExpiresAt) : null;
+
+      const startMs = startDateTime.getTime() - now.getTime();
+      const endMs = endDateTime.getTime() - now.getTime();
+      const holdMs = holdExpiresAt ? holdExpiresAt.getTime() - now.getTime() : null;
 
       return {
-        ...obj,
+        ...b,
+        user: {
+          ...b.user,
+          name: b?.user?.userId?.username || b?.user?.name || "-",
+          email: b?.user?.userId?.email || b?.user?.email || "-",
+          phoneNumber: b?.user?.userId?.phoneNumber || b?.user?.phoneNumber || "-",
+          kycStatus: rawKycStatus,
+          kycCompleted: isKycCompleted(rawKycStatus),
+          kycNormalizedStatus: normalizedKyc,
+        },
         timers: {
           startsInMs: startMs,
           endsInMs: endMs,
@@ -327,28 +360,78 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
           isUpcoming: startMs > 0,
           isActive: startMs <= 0 && endMs >= 0,
           isExpiredHold:
-            obj.status === "pending_hold" && holdMs !== null && holdMs <= 0,
+            b.status === "pending_hold" && holdMs !== null && holdMs <= 0,
         },
       };
     });
 
+    // 5) KYC filter
+    const filteredByKyc =
+      kycStatus && kycStatus !== "all"
+        ? enriched.filter((b) => matchesKycFilter(b.user?.kycStatus, kycStatus))
+        : enriched;
+
+    // 6) Stats on ALL owner bookings matching booking filters (before KYC filter)
+    const stats = {
+      totalBookings: enriched.length,
+      kycCompleted: enriched.filter((b) => isKycCompleted(b.user?.kycStatus)).length,
+      kycNotCompleted: enriched.filter(
+        (b) => !isKycCompleted(b.user?.kycStatus),
+      ).length,
+      byKycStatus: {
+        verified: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "verified").length,
+        pending: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "pending").length,
+        not_submitted: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "not_submitted").length,
+        awaiting_selfie: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "awaiting_selfie").length,
+        rejected: enriched.filter((b) => String(b.user?.kycStatus).toLowerCase() === "rejected").length,
+      },
+      confirmed: enriched.filter((b) => b.status === "confirmed").length,
+      pending: enriched.filter((b) => b.status === "pending").length,
+      cancelled: enriched.filter((b) => b.status === "cancelled").length,
+      completed: enriched.filter((b) => b.status === "completed").length,
+      expired: enriched.filter((b) => b.status === "expired").length,
+      upcoming: enriched.filter((b) => b.startDateTime > now).length,
+      active: enriched.filter(
+        (b) => new Date(b.startDateTime) <= now && new Date(b.endDateTime) >= now,
+      ).length,
+    };
+
+    // 7) Pagination after KYC filter
+    const total = filteredByKyc.length;
+    const pages = Math.ceil(total / limitNum);
+    const start = (pageNum - 1) * limitNum;
+    const paginated = filteredByKyc.slice(start, start + limitNum);
+
     return {
       success: true,
       data: {
-        bookings: enrichedBookings,
+        bookings: paginated,
         stats,
+        filters: {
+          status: status || "all",
+          kycStatus: kycStatus || "all",
+          upcoming,
+          past,
+          active,
+        },
         pagination: {
-          page,
-          limit,
+          page: pageNum,
+          limit: limitNum,
           total,
-          pages: Math.ceil(total / limit),
+          pages,
         },
       },
     };
   } catch (error) {
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message,
+    };
   }
 };
+
+
+
 
 export const getMyBookings = async (userId, filters = {}) => {
   try {

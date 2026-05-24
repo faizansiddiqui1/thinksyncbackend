@@ -91,11 +91,10 @@ export async function getAdminKycStatusHandler(req, res) {
 
       accountType,
       isCompanyAdmin,
-      isEmployee, 
+      isEmployee,
       companyId: user.companyId || null,
       company,
 
-      
       customRoles: user.customRoles || [],
       config,
       details: cv || {},
@@ -558,7 +557,10 @@ export const saveKycImage = async (req, res) => {
 
 export const getKycStatus = async (req, res) => {
   try {
-    const data = await svc.buildUserKycPayload(req.user._id);
+    // target user from admin panel
+    const targetUserId = req.query.user || req.query.userId || req.user._id;
+
+    const data = await svc.buildUserKycPayload(targetUserId);
 
     res.json({
       success: true,

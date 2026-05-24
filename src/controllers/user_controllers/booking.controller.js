@@ -118,12 +118,13 @@ export const verifyRazorpayPayment = async (req, res) => {
 
 
 
-
 export const getOwnerBookings = async (req, res) => {
   try {
-    const ownerId = req.user._id; // auth middleware se
+    const ownerId = req.user._id;
+
     const {
       status,
+      kycStatus = "all",
       page = 1,
       limit = 20,
       upcoming,
@@ -133,12 +134,17 @@ export const getOwnerBookings = async (req, res) => {
 
     const result = await bookingService.getOwnerBookings(ownerId, {
       status,
+      kycStatus,
       page: Number(page),
       limit: Number(limit),
       upcoming: upcoming === "true",
       past: past === "true",
       active: active === "true",
     });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
 
     return res.json(result);
   } catch (error) {
@@ -148,7 +154,6 @@ export const getOwnerBookings = async (req, res) => {
     });
   }
 };
-
 
 
 

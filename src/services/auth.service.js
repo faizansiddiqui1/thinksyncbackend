@@ -133,7 +133,35 @@ export const sendOtp = async ({
     return issueOtp(newUser, isMail ? email : phone, isMail, tenant);
   }
 
-  if (normalizedIntent === "admin") {
+  if (normalizedIntent === "admin-signup") {
+    if (!normalizedUsername) {
+      throw new Error("Username is required");
+    }
+
+    if (user) {
+      throw new Error("Admin account already exists. Please login.");
+    }
+
+    await ensureUsernameAvailable(normalizedUsername);
+
+    const newAdmin = new User(
+      isMail
+        ? {
+            username: normalizedUsername,
+            email,
+            role: "pending_admin",
+          }
+        : {
+            username: normalizedUsername,
+            phoneNumber: phone,
+            role: "pending_admin",
+          },
+    );
+
+    return issueOtp(newAdmin, isMail ? email : phone, isMail, tenant);
+  }
+
+  if (normalizedIntent === "admin-login") {
     if (!user) {
       throw new Error("Admin account not found");
     }
@@ -216,6 +244,19 @@ export const verifyOTPAndCreateTokens = async (
   const normalizedIntent = String(options.intent || "")
     .trim()
     .toLowerCase();
+
+  const isAdminFlow = ["admin", "admin-login", "admin-signup"].includes(
+    normalizedIntent,
+  );
+
+  if (isAdminFlow) {
+    await ensureAdminProfile(user._id);
+    if (user.role !== "admin" && user.role !== "super_admin") {
+      user.role = "pending_admin";
+    }
+  } else if (normalizedIntent) {
+    throw new Error("Invalid intent");
+  }
 
   if (normalizedIntent === "admin") {
     await ensureAdminProfile(user._id);
