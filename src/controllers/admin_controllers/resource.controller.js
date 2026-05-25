@@ -20,6 +20,7 @@ export async function createResource(req, res, next) {
     const resource = await service.createResourceForSpace(
       spaceId,
       payload,
+      req.user,
       tenant,
     );
 
@@ -54,7 +55,7 @@ export const addResourceImage = async (req, res) => {
     const img = await service.addResourceImage(
       req.params.resourceId,
       req.body,
-      req.user?.id,
+      req.user,
       tenant,
     );
 
@@ -80,6 +81,7 @@ export async function deleteResourceImage(req, res, next) {
     const result = await service.deleteResourceImage(
       resourceId,
       imageId,
+      req.user,
       tenant,
     );
 
@@ -106,7 +108,7 @@ export async function listResourcesBySpace(req, res, next) {
       sort: req.query.sort || "-createdAt",
     };
 
-    const resources = await service.getResourcesBySpace(spaceId, opts);
+    const resources = await service.getResourcesBySpace(spaceId, opts, req.user);
 
     return res
       .status(200)
@@ -122,7 +124,7 @@ export async function listResourcesBySpace(req, res, next) {
 export async function getResource(req, res, next) {
   try {
     const { resourceId } = req.params;
-    const resource = await service.getResourceById(resourceId);
+    const resource = await service.getResourceById(resourceId, req.user);
 
     return res.status(200).json({ success: true, data: resource });
   } catch (err) {
@@ -139,7 +141,12 @@ export async function updateResource(req, res, next) {
     const updates = req.body;
     const tenant = getTenant(req);
 
-    const resource = await service.updateResource(resourceId, updates, tenant);
+    const resource = await service.updateResource(
+      resourceId,
+      updates,
+      req.user,
+      tenant,
+    );
 
     return res.status(200).json({ success: true, data: resource });
   } catch (err) {
@@ -155,7 +162,7 @@ export async function removeResource(req, res, next) {
     const { resourceId } = req.params;
     const tenant = getTenant(req);
 
-    const resource = await service.deleteResource(resourceId, tenant);
+    const resource = await service.deleteResource(resourceId, req.user, tenant);
 
     return res.status(200).json({ success: true, data: resource });
   } catch (err) {

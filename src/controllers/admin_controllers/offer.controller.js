@@ -4,29 +4,29 @@ import { validateOfferPreview, redeemOffer } from "../../services/offer.service.
 export const createOffer = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
-    const offer = await service.createOffer(spaceId, req.body, req.user?.id);
+    const offer = await service.createOffer(spaceId, req.body, req.user);
     return res.status(201).json({ message: "Offer created", data: offer });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const listOffers = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
-    const offers = await service.listOffers(spaceId);
+    const offers = await service.listOffers(spaceId, req.user);
     if (!offers || offers.length === 0) {
       return res.status(404).json({ message: "No active offers found for this space" });
     }
     return res.status(200).json({ message: "Offers fetched", data: offers });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const listAllOffers = async (req, res) => {
   try {
-    const offers = await service.listAllOffers();
+    const offers = await service.listAllOffers(req.user);
 
     if (!offers || offers.length === 0) {
       return res.status(404).json({ message: "No active offers found" });
@@ -37,29 +37,29 @@ export const listAllOffers = async (req, res) => {
       data: offers,
     });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const updateOffer = async (req, res) => {
   try {
     const { spaceId, offerId } = req.params;
-    const offer = await service.updateOffer(spaceId, offerId, req.body, req.user?.id);
+    const offer = await service.updateOffer(spaceId, offerId, req.body, req.user);
     if (!offer) return res.status(404).json({ message: "Offer not found" });
     return res.status(200).json({ message: "Offer updated", data: offer });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const deleteOffer = async (req, res) => {
   try {
     const { spaceId, offerId } = req.params;
-    const ok = await service.deleteOffer(spaceId, offerId, req.user?.id);
+    const ok = await service.deleteOffer(spaceId, offerId, req.user);
     if (!ok) return res.status(404).json({ message: "Offer not found" });
     return res.status(200).json({ message: "Offer deleted" });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 

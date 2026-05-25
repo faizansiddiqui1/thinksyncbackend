@@ -23,7 +23,11 @@ import { saveGatewayCredentials } from "../controllers/admin_controllers/payment
 
 import { validateGatewayPayload } from "../middlewares/paymentGateway.validator.js";
 
-import { requireAdminAccess, requireAuth } from "../middlewares/auth.js";
+import {
+  requireAdminAccess,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
 import Booking from "../models/user_models/Booking.js";
 
 const router = express.Router();
@@ -39,7 +43,13 @@ router.post("/me/bookings/:id/cancel", requireAuth, cancelMyBooking);
 
 
 
-router.get("/owner/bookings", requireAuth, requireAdminAccess, getOwnerBookings);
+router.get(
+  "/owner/bookings",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("booking", "read"),
+  getOwnerBookings,
+);
 
 
 router.post(

@@ -14,6 +14,7 @@ import {
   approveKyc,
   rejectKyc,
 } from "../controllers/admin_controllers/kyc.controller.js";
+import { getOwnerDashboard } from "../controllers/admin_controllers/dashboard.controller.js";
 
 import * as roleController from "../controllers/super_admin_controllers/role.controller.js";
 
@@ -25,6 +26,14 @@ const router = express.Router();
 router.get("/profile", requireAuth, loadAdminProfile, getAdminProfile);
 
 router.post("/kyc/submit", requireAuth, loadAdminProfile, submitKyc);
+
+router.get(
+  "/admin/dashboard/owner",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("dashboard_analytics", "read"),
+  getOwnerDashboard,
+);
 
 // Approve/Reject – super admin only (ya custom permission 'kyc_review')
 router.post(

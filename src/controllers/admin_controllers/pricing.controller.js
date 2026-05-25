@@ -3,19 +3,17 @@ import * as service from "../../services/plan.service.js";
 export const createPricingPlan = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
-    const plan = await service.createPlan(spaceId, req.body, req.user?.id);
+    const plan = await service.createPlan(spaceId, req.body, req.user);
     return res.status(201).json({ message: "Plan created", data: plan });
   } catch (err) {
     // validation / business messages should be 400
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const listAllPricingPlans = async (req, res) => {
   try {
-    const userId = req.user._id; // ✅ IMPORTANT (_id not id)
-
-    const plans = await service.listAllPlans(userId);
+    const plans = await service.listAllPlans(req.user);
 
     if (!plans || plans.length === 0) {
       return res.status(404).json({ message: "No pricing plans found" });
@@ -26,14 +24,14 @@ export const listAllPricingPlans = async (req, res) => {
       data: plans,
     });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const listPricingPlans = async (req, res) => {
   try {
     const spaceId = req.params.spaceId;
-    const plans = await service.listPlans(spaceId);
+    const plans = await service.listPlans(spaceId, req.user);
     if (!plans || plans.length === 0) {
       return res
         .status(404)
@@ -41,7 +39,7 @@ export const listPricingPlans = async (req, res) => {
     }
     return res.status(200).json({ message: "Plans fetched", data: plans });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
@@ -52,22 +50,22 @@ export const updatePricingPlan = async (req, res) => {
       spaceId,
       planId,
       req.body,
-      req.user?.id,
+      req.user,
     );
     if (!plan) return res.status(404).json({ message: "Plan not found" });
     return res.status(200).json({ message: "Plan updated", data: plan });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const deletePricingPlan = async (req, res) => {
   try {
     const { spaceId, planId } = req.params;
-    const ok = await service.deletePlan(spaceId, planId, req.user?.id);
+    const ok = await service.deletePlan(spaceId, planId, req.user);
     if (!ok) return res.status(404).json({ message: "Plan not found" });
     return res.status(200).json({ message: "Plan deleted" });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };

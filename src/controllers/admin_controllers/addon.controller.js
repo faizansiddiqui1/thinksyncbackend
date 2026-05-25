@@ -17,7 +17,12 @@ export async function createAddon(req, res, next) {
     const payload = req.body;
     const tenant = getTenant(req);
 
-    const addon = await service.createAddonForSpace(spaceId, payload, tenant);
+    const addon = await service.createAddonForSpace(
+      spaceId,
+      payload,
+      req.user,
+      tenant,
+    );
 
     return res.status(201).json({
       success: true,
@@ -44,7 +49,7 @@ export async function getAllAddons(req, res, next) {
       select: req.query.select,
     };
 
-    const addons = await service.getAllAddons(filters);
+    const addons = await service.getAllAddons(filters, req.user);
 
     return res.status(200).json({
       success: true,
@@ -72,7 +77,7 @@ export async function listAddonsBySpace(req, res, next) {
       sort: req.query.sort || "-createdAt",
     };
 
-    const addons = await service.getAddonsBySpace(spaceId, opts);
+    const addons = await service.getAddonsBySpace(spaceId, opts, req.user);
 
     return res.status(200).json({
       success: true,
@@ -90,7 +95,7 @@ export async function listAddonsBySpace(req, res, next) {
 export async function getAddon(req, res, next) {
   try {
     const { addonId } = req.params;
-    const addon = await service.getAddonById(addonId);
+    const addon = await service.getAddonById(addonId, req.user);
 
     return res.status(200).json({
       success: true,
@@ -110,7 +115,7 @@ export async function updateAddon(req, res, next) {
     const updates = req.body;
     const tenant = getTenant(req);
 
-    const addon = await service.updateAddon(addonId, updates, tenant);
+    const addon = await service.updateAddon(addonId, updates, req.user, tenant);
 
     return res.status(200).json({
       success: true,
@@ -129,7 +134,7 @@ export async function removeAddon(req, res, next) {
     const { addonId } = req.params;
     const tenant = getTenant(req);
 
-    const addon = await service.deleteAddon(addonId, tenant);
+    const addon = await service.deleteAddon(addonId, req.user, tenant);
 
     return res.status(200).json({
       success: true,
@@ -152,7 +157,7 @@ export async function addAddonImage(req, res, next) {
     const img = await service.addAddonImage(
       req.params.addonId,
       req.body,
-      req.user?.id,
+      req.user,
       tenant,
     );
 
@@ -174,7 +179,12 @@ export async function deleteAddonImage(req, res, next) {
     const { addonId, imageId } = req.params;
     const tenant = getTenant(req);
 
-    const result = await service.deleteAddonImage(addonId, imageId, tenant);
+    const result = await service.deleteAddonImage(
+      addonId,
+      imageId,
+      req.user,
+      tenant,
+    );
 
     return res.status(200).json({
       success: true,

@@ -16,7 +16,12 @@ import PricingPlan from "../../models/admin_models/PricingPlan.js";
 import Offer from "../../models/admin_models/Offer.js";
 import SpaceMedia from "../../models/admin_models/SpaceMedia.js";
 import VirtualOfficePlan from "../../models/admin_models/VirtualOfficePlan.js";
+import Addon from "../../models/admin_models/AddonSchema.js";
 import * as mediaService from "../../services/spaceMedia.service.js";
+import {
+  ensureSpaceAccess,
+  getScopeOwnerId,
+} from "../../services/spaceAccess.service.js";
 
 export const createSpace = async (req, res) => {
   try {
@@ -49,7 +54,10 @@ export const getFullSpaceById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const space = await Space.findById(id).lean();
+    const spaceDoc = await ensureSpaceAccess(id, req.user);
+    const space = await Space.findById(spaceDoc._id)
+      .populate("address.city", "name slug")
+      .lean();
 
     if (!space) {
       return res.status(404).json({
@@ -57,7 +65,14 @@ export const getFullSpaceById = async (req, res) => {
       });
     }
 
-    const [resources, pricingPlans, offers, media, virtualOfficePlans] =
+    const [
+      resources,
+      pricingPlans,
+      offers,
+      media,
+      virtualOfficePlans,
+      addons,
+    ] =
       await Promise.all([
         Resource.find({ space: id }).lean(),
 
@@ -71,6 +86,13 @@ export const getFullSpaceById = async (req, res) => {
           space: id,
           isActive: true,
         }).lean(),
+
+        Addon.find({
+          space: id,
+          isActive: true,
+        })
+          .sort({ displayOrder: 1, createdAt: -1 })
+          .lean(),
       ]);
 
     return res.json({
@@ -85,13 +107,15 @@ export const getFullSpaceById = async (req, res) => {
 
         virtualOfficePlans,
 
+        addons,
+
         media,
       },
     });
   } catch (err) {
     console.error(err);
 
-    return res.status(500).json({
+    return res.status(err.status || 500).json({
       error: err.message,
     });
   }
@@ -103,7 +127,7 @@ export const getFullSpacesForOwner = async (req, res) => {
     const query = {};
 
     if (!isSuperAdmin) {
-      query.owner = req.user.id;
+      query.owner = await getScopeOwnerId(req.user);
     } else if (req.query.ownerId) {
       query.owner = req.query.ownerId;
     }
@@ -114,7 +138,9 @@ export const getFullSpacesForOwner = async (req, res) => {
       query.isPublished = true;
     }
 
-    const spaces = await Space.find(query).lean();
+    const spaces = await Space.find(query)
+      .populate("address.city", "name slug")
+      .lean();
 
     if (!spaces.length) {
       return res.json({ items: [] });
@@ -122,7 +148,14 @@ export const getFullSpacesForOwner = async (req, res) => {
 
     const ids = spaces.map((s) => s._id);
 
-    const [resources, pricingPlans, offers, medias, virtualOfficePlans] =
+    const [
+      resources,
+      pricingPlans,
+      offers,
+      medias,
+      virtualOfficePlans,
+      addons,
+    ] =
       await Promise.all([
         Resource.find({ space: { $in: ids } }).lean(),
 
@@ -136,6 +169,13 @@ export const getFullSpacesForOwner = async (req, res) => {
           space: { $in: ids },
           isActive: true,
         }).lean(),
+
+        Addon.find({
+          space: { $in: ids },
+          isActive: true,
+        })
+          .sort({ displayOrder: 1, createdAt: -1 })
+          .lean(),
       ]);
 
     const group = (arr, key) => {
@@ -162,6 +202,8 @@ export const getFullSpacesForOwner = async (req, res) => {
 
     const virtualOfficeMap = group(virtualOfficePlans, "space");
 
+    const addonMap = group(addons, "space");
+
     const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
 
     const items = spaces.map((s) => ({
@@ -174,6 +216,8 @@ export const getFullSpacesForOwner = async (req, res) => {
       offers: offerMap.get(String(s._id)) || [],
 
       virtualOfficePlans: virtualOfficeMap.get(String(s._id)) || [],
+
+      addons: addonMap.get(String(s._id)) || [],
 
       media: mediaMap.get(String(s._id)) || {
         images: [],
@@ -191,7 +235,7 @@ export const getFullSpacesForOwner = async (req, res) => {
 
 export const publishSpaceController = async (req, res) => {
   try {
-    const space = await Space.findById(req.params.id);
+    const space = await ensureSpaceAccess(req.params.id, req.user);
 
     if (!space) {
       return res.status(404).json({ message: "Space not found" });
@@ -215,20 +259,24 @@ export const publishSpaceController = async (req, res) => {
       data: space,
     });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
 export const unpublishSpaceController = async (req, res) => {
-  const space = await Space.findById(req.params.id);
-  if (!space) return res.status(404).json({ message: "Not found" });
+  try {
+    const space = await ensureSpaceAccess(req.params.id, req.user);
+    if (!space) return res.status(404).json({ message: "Not found" });
 
-  space.status = "DRAFT";
-  space.isPublished = false;
+    space.status = "DRAFT";
+    space.isPublished = false;
 
-  await space.save();
+    await space.save();
 
-  res.json({ success: true, data: space });
+    res.json({ success: true, data: space });
+  } catch (err) {
+    return res.status(err.status || 400).json({ message: err.message });
+  }
 };
 
 export const getAllSpaces = async (req, res) => {
@@ -238,7 +286,8 @@ export const getAllSpaces = async (req, res) => {
     const spaces = await serviceGetAllSpaces(req.query, {
       limit: parseInt(req.query.limit) || 20,
       page: parseInt(req.query.page) || 1,
-      ownerId: req.user?.role === "super_admin" ? null : req.user?.id,
+      ownerId:
+        req.user?.role === "super_admin" ? null : await getScopeOwnerId(req.user),
     });
 
     return res.status(200).json({
@@ -255,6 +304,8 @@ export const getAllSpaces = async (req, res) => {
 
 export const updateSpace = async (req, res) => {
   try {
+    await ensureSpaceAccess(req.params.id, req.user);
+
     const space = await serviceUpdateSpace(
       req.params.id,
       req.body,
@@ -265,7 +316,7 @@ export const updateSpace = async (req, res) => {
       data: space,
     });
   } catch (error) {
-    return res.status(400).json({
+    return res.status(error.status || 400).json({
       message: error.message || "An error occurred while updating the space.",
     });
   }
@@ -273,13 +324,14 @@ export const updateSpace = async (req, res) => {
 
 export const deleteSpace = async (req, res) => {
   try {
+    await ensureSpaceAccess(req.params.id, req.user);
     const space = await serviceDeleteSpace(req.params.id);
     return res.status(200).json({
       message: "Space deleted successfully!",
       data: space,
     });
   } catch (error) {
-    return res.status(404).json({
+    return res.status(error.status || 404).json({
       message: error.message || "An error occurred while deleting the space.",
     });
   }
@@ -370,7 +422,7 @@ export const searchSpacesController = async (req, res) => {
 
     // 🔥 role-based filtering
     if (req.user.role !== "super_admin") {
-      filter.owner = req.user.id;
+      filter.owner = await getScopeOwnerId(req.user);
     }
 
     if (q) {

@@ -8,6 +8,12 @@ import {
   publicUrlForKey,
   resolveAwsConfig,
 } from "../config/s3.js";
+import {
+  ensureSpaceAccess,
+  getOwnedSpaceIds,
+  isSuperAdminUser,
+  getActorUserId,
+} from "./spaceAccess.service.js";
 
 const ensureSpaceExists = async (spaceId) => {
   const space = await Space.findById(spaceId).select("_id");
@@ -30,11 +36,28 @@ const ensureResourceExists = async (resourceId) => {
   return resource;
 };
 
+const ensureResourceAccess = async (resourceId, user) => {
+  const resource = await Resource.findById(resourceId);
+  if (!resource) {
+    const err = new Error("Resource not found");
+    err.status = 404;
+    throw err;
+  }
+
+  await ensureSpaceAccess(resource.space, user);
+  return resource;
+};
+
 const getImageUrl = ({ bucketName, region, key }) =>
   publicUrlForKey({ bucketName, region, key });
 
-export async function createResourceForSpace(spaceId, data, tenant = null) {
-  await ensureSpaceExists(spaceId);
+export async function createResourceForSpace(
+  spaceId,
+  data,
+  user = null,
+  tenant = null,
+) {
+  await ensureSpaceAccess(spaceId, user);
 
   const payload = { ...data, space: spaceId };
   const resource = await Resource.create(payload);
@@ -42,15 +65,10 @@ export async function createResourceForSpace(spaceId, data, tenant = null) {
 }
 
 export async function getAllResources(user) {
-  const userId = user?._id || user?.id || null;
-  if (!userId) throw new Error("user required");
-
   const query = {};
 
-  if (user?.role !== "super_admin") {
-    const spaces = await Space.find({ owner: userId }).select("_id").lean();
-    const spaceIds = spaces.map((space) => space._id);
-
+  if (!isSuperAdminUser(user)) {
+    const spaceIds = await getOwnedSpaceIds(user);
     if (!spaceIds.length) {
       return [];
     }
@@ -67,10 +85,10 @@ export async function getAllResources(user) {
 export const addResourceImage = async (
   resourceId,
   imageData,
-  userId = null,
+  user = null,
   tenant = null,
 ) => {
-  const resource = await ensureResourceExists(resourceId);
+  const resource = await ensureResourceAccess(resourceId, user);
 
   if (!imageData?.key) {
     throw new Error("Image key is required");
@@ -99,20 +117,25 @@ export const addResourceImage = async (
 
   resource.images.push(imageToSave);
 
-  if (userId) resource.updatedBy = userId;
+  if (getActorUserId(user)) resource.updatedBy = getActorUserId(user);
   await resource.save();
 
   return imageToSave;
 };
 
-export async function deleteResourceImage(resourceId, imageId, tenant = null) {
+export async function deleteResourceImage(
+  resourceId,
+  imageId,
+  user = null,
+  tenant = null,
+) {
   if (!resourceId || !imageId) {
     const err = new Error("resourceId and imageId are required");
     err.status = 400;
     throw err;
   }
 
-  const resource = await ensureResourceExists(resourceId);
+  const resource = await ensureResourceAccess(resourceId, user);
 
   const image = resource.images.id(imageId);
 
@@ -136,7 +159,9 @@ export async function deleteResourceImage(resourceId, imageId, tenant = null) {
   return { imageId };
 }
 
-export async function getResourcesBySpace(spaceId, opts = {}) {
+export async function getResourcesBySpace(spaceId, opts = {}, user = null) {
+  await ensureSpaceAccess(spaceId, user);
+
   const query = { space: spaceId };
   if (opts.activeOnly) query.isActive = true;
 
@@ -149,37 +174,43 @@ export async function getResourcesBySpace(spaceId, opts = {}) {
   return q.exec();
 }
 
-export async function getResourceById(resourceId) {
-  const r = await Resource.findById(resourceId).populate("space", "name slug");
+export async function getResourceById(resourceId, user = null) {
+  const r = await Resource.findById(resourceId).populate(
+    "space",
+    "name slug owner address status isPublished",
+  );
   if (!r) {
     const err = new Error("Resource not found");
     err.status = 404;
     throw err;
   }
+
+  if (!isSuperAdminUser(user)) {
+    await ensureSpaceAccess(r.space?._id || r.space, user);
+  }
+
   return r;
 }
 
-export async function updateResource(resourceId, updates, tenant = null) {
-  const resource = await Resource.findById(resourceId);
-  if (!resource) {
-    const err = new Error("Resource not found");
-    err.status = 404;
-    throw err;
-  }
+export async function updateResource(
+  resourceId,
+  updates,
+  user = null,
+  tenant = null,
+) {
+  const resource = await ensureResourceAccess(resourceId, user);
 
   Object.assign(resource, updates, { updatedAt: new Date() });
+  if (getActorUserId(user)) {
+    resource.updatedBy = getActorUserId(user);
+  }
   await resource.validate();
   await resource.save();
   return resource;
 }
 
-export async function deleteResource(resourceId, tenant = null) {
-  const resource = await Resource.findById(resourceId);
-  if (!resource) {
-    const err = new Error("Resource not found");
-    err.status = 404;
-    throw err;
-  }
+export async function deleteResource(resourceId, user = null, tenant = null) {
+  const resource = await ensureResourceAccess(resourceId, user);
 
   const imageKeys = (resource.images || [])
     .map((img) => img?.s3Key)

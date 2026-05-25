@@ -3,6 +3,12 @@ import Offer from "../models/admin_models/Offer.js";
 import Space from "../models/admin_models/Space.js";
 import CouponRedemption from "../models/admin_models/CouponRedemption.js";
 import Booking from "../models/user_models/Booking.js";
+import {
+  ensureSpaceAccess,
+  getOwnedSpaceIds,
+  getActorUserId,
+  isSuperAdminUser,
+} from "./spaceAccess.service.js";
 
 const ensureSpace = async (spaceId) => {
   if (!mongoose.Types.ObjectId.isValid(spaceId))
@@ -12,8 +18,8 @@ const ensureSpace = async (spaceId) => {
   return s;
 };
 
-export const createOffer = async (spaceId, data, userId = null) => {
-  await ensureSpace(spaceId);
+export const createOffer = async (spaceId, data, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
 
   if (!data.code) throw new Error("Offer code is required");
   if (!data.discountType) throw new Error("discountType is required");
@@ -51,15 +57,15 @@ export const createOffer = async (spaceId, data, userId = null) => {
     usedCount: 0,
     stackable: !!data.stackable,
     isActive: data.isActive === undefined ? true : !!data.isActive,
-    createdBy: userId,
-    updatedBy: userId,
+    createdBy: getActorUserId(user),
+    updatedBy: getActorUserId(user),
   });
 
   return offer.toObject ? offer.toObject() : offer;
 };
 
-export const listOffers = async (spaceId) => {
-  await ensureSpace(spaceId);
+export const listOffers = async (spaceId, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
   const offers = await Offer.find({ space: spaceId })
     .sort({ validTill: 1, createdAt: -1 })
     .lean()
@@ -67,9 +73,20 @@ export const listOffers = async (spaceId) => {
   return offers;
 };
 
-export const listAllOffers = async () => {
-  const offers = await Offer.find()
-    .populate("space", "name") // optional (space name show karne ke liye)
+export const listAllOffers = async (user = null) => {
+  const query = {};
+
+  if (!isSuperAdminUser(user)) {
+    const spaceIds = await getOwnedSpaceIds(user);
+    if (!spaceIds?.length) {
+      return [];
+    }
+
+    query.space = { $in: spaceIds };
+  }
+
+  const offers = await Offer.find(query)
+    .populate("space", "name slug owner status isPublished")
     .sort({ validTill: 1, createdAt: -1 })
     .lean()
     .exec();
@@ -77,8 +94,8 @@ export const listAllOffers = async () => {
   return offers;
 };
 
-export const updateOffer = async (spaceId, offerId, data, userId = null) => {
-  await ensureSpace(spaceId);
+export const updateOffer = async (spaceId, offerId, data, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
 
   if (!mongoose.Types.ObjectId.isValid(offerId))
     throw new Error("Invalid offer id");
@@ -126,13 +143,13 @@ export const updateOffer = async (spaceId, offerId, data, userId = null) => {
     if (data[k] !== undefined) offer[k] = data[k];
   }
 
-  offer.updatedBy = userId;
+  offer.updatedBy = getActorUserId(user);
   await offer.save();
   return offer.toObject ? offer.toObject() : offer;
 };
 
-export const deleteOffer = async (spaceId, offerId, userId = null) => {
-  await ensureSpace(spaceId);
+export const deleteOffer = async (spaceId, offerId, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
   if (!mongoose.Types.ObjectId.isValid(offerId))
     throw new Error("Invalid offer id");
 
@@ -140,7 +157,7 @@ export const deleteOffer = async (spaceId, offerId, userId = null) => {
   if (!offer) return null;
 
   offer.isActive = false;
-  offer.updatedBy = userId;
+  offer.updatedBy = getActorUserId(user);
   await offer.save();
   return true;
 };

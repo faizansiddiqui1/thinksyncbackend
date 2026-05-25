@@ -1,18 +1,55 @@
 import express from "express";
 import { createPricingPlan, deletePricingPlan, listAllPricingPlans, listPricingPlans, updatePricingPlan } from "../controllers/admin_controllers/pricing.controller.js";
-import { requireAdminApproved, requireAuth,  } from "../middlewares/auth.js";
+import {
+  requireAdminAccess,
+  requireAdminApproved,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
 
 const router = express.Router();
 
 // create / list are under space
-router.post("/spaces/:spaceId/pricing-plans", createPricingPlan);
+router.post(
+  "/spaces/:spaceId/pricing-plans",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("pricing_plan", "create"),
+  createPricingPlan,
+);
 
-router.get("/pricing-plans", requireAuth, listAllPricingPlans);
+router.get(
+  "/pricing-plans",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("pricing_plan", "read"),
+  listAllPricingPlans,
+);
 
-router.get("/spaces/:spaceId/pricing-plans", listPricingPlans);
+router.get(
+  "/spaces/:spaceId/pricing-plans",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("pricing_plan", "read"),
+  listPricingPlans,
+);
 
-router.put("/spaces/:spaceId/pricing-plans/:planId", requireAuth, requireAdminApproved, updatePricingPlan);
+router.put(
+  "/spaces/:spaceId/pricing-plans/:planId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("pricing_plan", "update"),
+  requireAdminApproved,
+  updatePricingPlan,
+);
 
-router.delete("/spaces/:spaceId/pricing-plans/:planId", requireAuth, requireAdminApproved, deletePricingPlan);
+router.delete(
+  "/spaces/:spaceId/pricing-plans/:planId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("pricing_plan", "delete"),
+  requireAdminApproved,
+  deletePricingPlan,
+);
 
 export default router;

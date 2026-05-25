@@ -1,6 +1,12 @@
 import mongoose from "mongoose";
 import PricingPlan from "../models/admin_models/PricingPlan.js";
 import Space from "../models/admin_models/Space.js";
+import {
+  ensureSpaceAccess,
+  getOwnedSpaceIds,
+  getActorUserId,
+  isSuperAdminUser,
+} from "./spaceAccess.service.js";
 
 const ensureSpace = async (spaceId) => {
   if (!mongoose.Types.ObjectId.isValid(spaceId))
@@ -10,8 +16,8 @@ const ensureSpace = async (spaceId) => {
   return s;
 };
 
-export const createPlan = async (spaceId, data, userId = null) => {
-  await ensureSpace(spaceId);
+export const createPlan = async (spaceId, data, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
 
   // enforce max 3 active plans
   const count = await PricingPlan.countDocuments({
@@ -59,25 +65,34 @@ export const createPlan = async (spaceId, data, userId = null) => {
     popular: !!data.popular,
     order,
     isActive: true,
-    createdBy: userId,
-    updatedBy: userId,
+    createdBy: getActorUserId(user),
+    updatedBy: getActorUserId(user),
   });
 
   return plan.toObject ? plan.toObject() : plan;
 };
 
-export const listAllPlans = async (userId) => {
-  if (!userId) throw new Error("userId required");
+export const listAllPlans = async (user = null) => {
+  const query = {};
 
-  return PricingPlan.find({ createdBy: userId }) // ✅ FILTER
-    .populate("space", "name")
+  if (!isSuperAdminUser(user)) {
+    const spaceIds = await getOwnedSpaceIds(user);
+    if (!spaceIds?.length) {
+      return [];
+    }
+
+    query.space = { $in: spaceIds };
+  }
+
+  return PricingPlan.find(query)
+    .populate("space", "name slug owner status isPublished")
     .sort({ createdAt: -1 })
     .lean()
     .exec();
 };
 
-export const listPlans = async (spaceId) => {
-  await ensureSpace(spaceId);
+export const listPlans = async (spaceId, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
   const plans = await PricingPlan.find({ space: spaceId })
     .sort({ order: 1 })
     .lean()
@@ -85,8 +100,8 @@ export const listPlans = async (spaceId) => {
   return plans;
 };
 
-export const updatePlan = async (spaceId, planId, data, userId = null) => {
-  await ensureSpace(spaceId);
+export const updatePlan = async (spaceId, planId, data, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
 
   if (!mongoose.Types.ObjectId.isValid(planId))
     throw new Error("Invalid plan id");
@@ -133,7 +148,7 @@ export const updatePlan = async (spaceId, planId, data, userId = null) => {
     if (Object.prototype.hasOwnProperty.call(data, k)) plan[k] = data[k];
   }
 
-  plan.updatedBy = userId;
+  plan.updatedBy = getActorUserId(user);
   await plan.save();
 
   // normalize orders (re-sequence active plans to 1..N)
@@ -149,8 +164,8 @@ export const updatePlan = async (spaceId, planId, data, userId = null) => {
   return plan.toObject ? plan.toObject() : plan;
 };
 
-export const deletePlan = async (spaceId, planId, userId = null) => {
-  await ensureSpace(spaceId);
+export const deletePlan = async (spaceId, planId, user = null) => {
+  await ensureSpaceAccess(spaceId, user);
 
   if (!mongoose.Types.ObjectId.isValid(planId))
     throw new Error("Invalid plan id");
@@ -160,7 +175,7 @@ export const deletePlan = async (spaceId, planId, userId = null) => {
   if (!plan) return null;
 
   plan.isActive = false;
-  plan.updatedBy = userId;
+  plan.updatedBy = getActorUserId(user);
   await plan.save();
 
   // resequence remaining active plans

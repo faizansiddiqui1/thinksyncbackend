@@ -8,18 +8,54 @@ import {
   listAllOffers,
   redeemOfferController,
 } from "../controllers/admin_controllers/offer.controller.js";
-import { requireAdminApproved, requireAuth } from "../middlewares/auth.js";
+import {
+  requireAdminAccess,
+  requireAdminApproved,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
 
 const router = express.Router();
 
-router.post("/spaces/:spaceId/offers", createOffer);
+router.post(
+  "/spaces/:spaceId/offers",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("offers", "create"),
+  createOffer,
+);
 
-router.get("/spaces/:spaceId/offers", listOffers);
+router.get(
+  "/spaces/:spaceId/offers",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("offers", "read"),
+  listOffers,
+);
 
-router.get("/offers", listAllOffers);
+router.get(
+  "/offers",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("offers", "read"),
+  listAllOffers,
+);
 
-router.put("/spaces/:spaceId/offers/:offerId", requireAuth, updateOffer);
-router.delete("/spaces/:spaceId/offers/:offerId", requireAuth, requireAdminApproved, deleteOffer);
+router.put(
+  "/spaces/:spaceId/offers/:offerId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("offers", "update"),
+  updateOffer,
+);
+router.delete(
+  "/spaces/:spaceId/offers/:offerId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("offers", "delete"),
+  requireAdminApproved,
+  deleteOffer,
+);
 
 
 // preview (no auth optional)

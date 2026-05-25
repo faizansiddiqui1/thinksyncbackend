@@ -1,1 +1,0 @@
-Inspection placeholder file created only to satisfy workflow enforcement. Original analyzed project file was src/models/admin_models/property.model.js.
