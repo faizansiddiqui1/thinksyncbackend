@@ -376,6 +376,13 @@ const spaceSchema = new Schema(
       default: "DRAFT",
     },
 
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+      index: true,
+    },
+
     adminNotes: String,
 
     internalFlags: {

@@ -78,10 +78,7 @@ export const loadAdminProfile = async (req, res, next) => {
     const profile = await AdminProfile.findOne({ owner: req.user._id });
 
     // Owner-level admin → profile required
-    if (
-      (req.user.role === "admin" || req.user.role === "super_admin") &&
-      !profile
-    ) {
+    if (req.user.role === "admin" && !profile) {
       return res.status(403).json({ message: "Admin profile not found" });
     }
 

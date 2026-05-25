@@ -1,12 +1,6 @@
-// models/admin_models/SpaceDocument.js
-
 import mongoose from "mongoose";
 
 const { Schema } = mongoose;
-
-/* =========================
-   DEFAULT DOCUMENT TYPES
-========================= */
 
 export const DOCUMENT_TYPES = [
   "UTILITY_BILL",
@@ -24,15 +18,10 @@ export const DOCUMENT_TYPES = [
   "BOARD_RESOLUTION",
 ];
 
-/* =========================
-   FILE
-========================= */
-
 const fileSchema = new Schema(
   {
     url: { type: String },
     s3Key: { type: String },
-
     originalName: String,
     mimeType: String,
     size: Number,
@@ -40,17 +29,8 @@ const fileSchema = new Schema(
   { _id: false },
 );
 
-/* =========================
-   SPACE DOCUMENT
-========================= */
-
 const spaceDocumentSchema = new Schema(
   {
-    /* -------------------------
-       CITY DEFAULT
-       SPACE CUSTOM
-    ------------------------- */
-
     scopeType: {
       type: String,
       enum: ["CITY", "SPACE"],
@@ -58,19 +38,11 @@ const spaceDocumentSchema = new Schema(
       index: true,
     },
 
-    /* -------------------------
-       CITY LEVEL DOC
-    ------------------------- */
-
     city: {
       type: Schema.Types.ObjectId,
       ref: "City",
       index: true,
     },
-
-    /* -------------------------
-       WORKSPACE LEVEL DOC
-    ------------------------- */
 
     space: {
       type: Schema.Types.ObjectId,
@@ -78,11 +50,6 @@ const spaceDocumentSchema = new Schema(
       index: true,
     },
 
-    /* -------------------------
-       DOCUMENT TYPE
-    ------------------------- */
-
-    // fixed type
     documentType: {
       type: String,
       enum: DOCUMENT_TYPES,
@@ -90,15 +57,12 @@ const spaceDocumentSchema = new Schema(
       index: true,
     },
 
-    // custom type support
     customType: {
       type: String,
       trim: true,
       default: "",
     },
 
-    // final resolved key
-    // utility_bill OR company_kyc etc
     documentKey: {
       type: String,
       required: true,
@@ -114,19 +78,11 @@ const spaceDocumentSchema = new Schema(
       },
     ],
 
-    /* -------------------------
-       DOCUMENT LABEL
-    ------------------------- */
-
     label: {
       type: String,
       required: true,
       trim: true,
     },
-
-    /* -------------------------
-       AVAILABLE / NOT AVAILABLE
-    ------------------------- */
 
     status: {
       type: String,
@@ -135,34 +91,50 @@ const spaceDocumentSchema = new Schema(
       index: true,
     },
 
-    /* -------------------------
-       SAMPLE TYPE
-    ------------------------- */
+    verificationStatus: {
+      type: String,
+      enum: ["pending", "verified", "rejected"],
+      default: "pending",
+      index: true,
+    },
 
-    // uploaded by platform owner
+    reviewStatus: {
+      type: String,
+      enum: ["pending", "verified", "rejected"],
+      default: "pending",
+      index: true,
+    },
+
+    reviewNote: {
+      type: String,
+      default: "",
+    },
+
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
+
+    reviewedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     isPlatformSample: {
       type: Boolean,
       default: false,
     },
 
-    // uploaded by workspace owner
     isWorkspaceSample: {
       type: Boolean,
       default: false,
     },
 
-    /* -------------------------
-       FILE
-    ------------------------- */
-
     file: {
       type: fileSchema,
       default: null,
     },
-
-    /* -------------------------
-       SETTINGS
-    ------------------------- */
 
     isActive: {
       type: Boolean,
@@ -180,10 +152,6 @@ const spaceDocumentSchema = new Schema(
       default: "",
     },
 
-    /* -------------------------
-       AUDIT
-    ------------------------- */
-
     uploadedBy: {
       type: Schema.Types.ObjectId,
       ref: "Admin",
@@ -199,37 +167,19 @@ const spaceDocumentSchema = new Schema(
   },
 );
 
-/* =========================
-   VALIDATIONS
-========================= */
-
 spaceDocumentSchema.pre("validate", function (next) {
-  /* -------------------------
-     CITY VALIDATION
-  ------------------------- */
-
   if (this.scopeType === "CITY" && !this.city) {
     return next(new Error("city is required"));
   }
-
-  /* -------------------------
-     SPACE VALIDATION
-  ------------------------- */
 
   if (this.scopeType === "SPACE" && !this.space) {
     return next(new Error("space is required"));
   }
 
-  /* -------------------------
-     DOCUMENT KEY
-  ------------------------- */
-
-  // default type
   if (this.documentType) {
     this.documentKey = this.documentType.toLowerCase();
   }
 
-  // custom type
   if (!this.documentType && this.customType) {
     this.documentKey = this.customType
       .trim()
@@ -237,23 +187,12 @@ spaceDocumentSchema.pre("validate", function (next) {
       .replace(/\s+/g, "_");
   }
 
-  /* -------------------------
-     FILE VALIDATION
-  ------------------------- */
-
-  // file required only when available
   if (this.status === "AVAILABLE" && (!this.file || !this.file.url)) {
     return next(new Error("file is required when status is AVAILABLE"));
   }
 
   next();
 });
-
-/* =========================
-   INDEXES
-========================= */
-
-// CITY DEFAULT DOCS
 
 spaceDocumentSchema.index(
   {
@@ -269,8 +208,6 @@ spaceDocumentSchema.index(
     },
   },
 );
-
-// WORKSPACE CUSTOM DOCS
 
 spaceDocumentSchema.index(
   {

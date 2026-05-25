@@ -47,9 +47,6 @@ const getFileUrl = async (tenant, key) => {
   });
 };
 
-/* =========================
-   ADD / REPLACE
-========================= */
 export const addDocument = async (
   scopeType,
   scopeId,
@@ -125,31 +122,27 @@ export const addDocument = async (
     scopeType,
     city: scopeType === "CITY" ? scopeId : undefined,
     space: scopeType === "SPACE" ? scopeId : undefined,
-
     documentType: body.documentType || null,
     customType: body.customType || "",
     documentKey,
-
     label: body.label,
-
     status: incomingStatus,
-
     file,
-
     note: body.note || "",
-
+    verificationStatus: "pending",
+    reviewStatus: "pending",
+    reviewNote: "",
+    reviewedAt: null,
+    reviewedBy: null,
     solutionTypes,
-
     isPlatformSample:
       typeof body.isPlatformSample === "boolean"
         ? body.isPlatformSample
         : scopeType === "CITY",
-
     isWorkspaceSample:
       typeof body.isWorkspaceSample === "boolean"
         ? body.isWorkspaceSample
         : scopeType === "SPACE",
-
     uploadedBy: userId || undefined,
     updatedBy: userId || undefined,
     isActive: true,
@@ -173,9 +166,40 @@ export const addDocument = async (
   return doc;
 };
 
-/* =========================
-   DELETE
-========================= */
+export const reviewDocument = async (
+  documentId,
+  body = {},
+  userId = null,
+) => {
+  if (!mongoose.Types.ObjectId.isValid(documentId)) {
+    throw new Error("Invalid document id");
+  }
+
+  const status = String(
+    body.reviewStatus || body.verificationStatus || body.status || "pending",
+  ).toLowerCase();
+
+  if (!["pending", "verified", "rejected"].includes(status)) {
+    throw new Error("Invalid review status");
+  }
+
+  const doc = await SpaceDocument.findById(documentId);
+  if (!doc) throw new Error("Document not found");
+
+  doc.verificationStatus = status;
+  doc.reviewStatus = status;
+  doc.reviewNote = body.reviewNote || body.note || "";
+  doc.reviewedAt = new Date();
+  doc.reviewedBy = userId || null;
+
+  if (userId) {
+    doc.updatedBy = userId;
+  }
+
+  await doc.save();
+  return doc;
+};
+
 export const deleteDocument = async (
   documentId,
   userId = null,
@@ -196,9 +220,6 @@ export const deleteDocument = async (
   return true;
 };
 
-/* =========================
-   GET BY SCOPE
-========================= */
 export const getDocumentsByScope = async (scopeType, scopeId) => {
   if (!scopeType || !scopeId) {
     throw new Error("scopeType and scopeId are required");
@@ -216,13 +237,8 @@ export const getDocumentsByScope = async (scopeType, scopeId) => {
   return await SpaceDocument.find(query).sort({ createdAt: -1 }).lean().exec();
 };
 
-/* =========================
-   EFFECTIVE WORKSPACE DOCS
-   workspace overrides city
-========================= */
 export const getEffectiveDocumentsBySpace = async (spaceId) => {
   const space = await ensureSpaceExists(spaceId);
-
   const cityId = String(space.address.city);
 
   const docs = await SpaceDocument.find({

@@ -99,9 +99,22 @@ export const getFullSpaceById = async (req, res) => {
 
 export const getFullSpacesForOwner = async (req, res) => {
   try {
-    const ownerId = req.user.id;
+    const isSuperAdmin = req.user?.role === "super_admin";
+    const query = {};
 
-    const spaces = await Space.find({ owner: ownerId }).lean();
+    if (!isSuperAdmin) {
+      query.owner = req.user.id;
+    } else if (req.query.ownerId) {
+      query.owner = req.query.ownerId;
+    }
+
+    if (req.query.status === "DRAFT") {
+      query.isPublished = false;
+    } else if (req.query.status === "PUBLISHED") {
+      query.isPublished = true;
+    }
+
+    const spaces = await Space.find(query).lean();
 
     if (!spaces.length) {
       return res.json({ items: [] });
@@ -225,7 +238,7 @@ export const getAllSpaces = async (req, res) => {
     const spaces = await serviceGetAllSpaces(req.query, {
       limit: parseInt(req.query.limit) || 20,
       page: parseInt(req.query.page) || 1,
-      ownerId: req.user?.id,
+      ownerId: req.user?.role === "super_admin" ? null : req.user?.id,
     });
 
     return res.status(200).json({

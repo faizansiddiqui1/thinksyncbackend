@@ -16,13 +16,18 @@ function generateInternalTenantDomain(adminId) {
 
 export const getWhiteLabelRequests = async (req, res) => {
   try {
-    const { status = "pending", page = 1, limit = 20 } = req.query;
+    const { status = "all", page = 1, limit = 20 } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
 
-    const query = {
-      "whiteLabel.status": status,
-    };
+    const query =
+      status && status !== "all"
+        ? { "whiteLabel.status": status }
+        : {
+            "whiteLabel.status": {
+              $in: ["pending", "approved", "rejected"],
+            },
+          };
 
     const [items, total] = await Promise.all([
       AdminProfile.find(query)

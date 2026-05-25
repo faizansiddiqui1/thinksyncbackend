@@ -40,6 +40,7 @@ const ALLOWED_FIELDS = [
   "isPublished",
   "tags",
   "categories",
+  "approvalStatus",
   "adminNotes",
   "internalFlags",
   "centerDetails",

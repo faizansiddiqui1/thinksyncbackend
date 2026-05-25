@@ -15,7 +15,7 @@ export async function createResource(req, res, next) {
   try {
     const { spaceId } = req.params;
     const payload = req.body;
-    const tenant = getTenant(req);  
+    const tenant = getTenant(req);
 
     const resource = await service.createResourceForSpace(
       spaceId,
@@ -35,9 +35,7 @@ export async function createResource(req, res, next) {
  */
 export async function getAllResources(req, res, next) {
   try {
-    const userId = req.user.id; // 👈 logged in admin
-
-    const resources = await service.getAllResources(userId);
+    const resources = await service.getAllResources(req.user);
 
     return res.status(200).json({
       success: true,

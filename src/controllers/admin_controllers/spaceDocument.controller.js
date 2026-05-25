@@ -1,6 +1,5 @@
 import * as service from "../../services/spaceDocument.service.js";
 
-/* ADD / REPLACE */
 export const addDocument = async (req, res) => {
   try {
     const tenant = req.context?.tenant || req.tenant || null;
@@ -22,7 +21,23 @@ export const addDocument = async (req, res) => {
   }
 };
 
-/* DELETE */
+export const reviewDocument = async (req, res) => {
+  try {
+    const doc = await service.reviewDocument(
+      req.params.documentId,
+      req.body,
+      req.user?.id,
+    );
+
+    return res.status(200).json({
+      message: "Document reviewed",
+      data: doc,
+    });
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+};
+
 export const deleteDocument = async (req, res) => {
   try {
     const tenant = req.context?.tenant || req.tenant || null;
@@ -35,7 +50,6 @@ export const deleteDocument = async (req, res) => {
   }
 };
 
-/* GET BY SCOPE */
 export const getDocumentsByScope = async (req, res) => {
   try {
     const docs = await service.getDocumentsByScope(
@@ -52,7 +66,6 @@ export const getDocumentsByScope = async (req, res) => {
   }
 };
 
-/* GET EFFECTIVE WORKSPACE DOCS */
 export const getEffectiveDocumentsBySpace = async (req, res) => {
   try {
     const docs = await service.getEffectiveDocumentsBySpace(req.params.spaceId);

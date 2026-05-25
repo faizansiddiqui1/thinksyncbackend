@@ -22,6 +22,7 @@ import adminRoutes from "./routes/admin.routes.js";
 import CompanyVerificationRoutes from "./routes/companyverification.routes.js";
 import BookingRoutes from "./routes/booking.routes.js";
 import whiteLabelRoutes from "./routes/whiteLabel.routes.js"
+import superAdminRoutes from "./routes/superAdmin.routes.js"
 
  
 import enquiryRoutes from "./routes/enquiry.routes.js"
@@ -139,6 +140,7 @@ app.use("/api/users", userRoutes);
 
 /* Admin area */
 app.use("/api", adminRoutes);
+app.use("/api", superAdminRoutes);
 
 app.use("/api/admin/smtp", smtpRoutes);
 app.use("/api", CompanyVerificationRoutes);

@@ -41,11 +41,25 @@ export async function createResourceForSpace(spaceId, data, tenant = null) {
   return resource;
 }
 
-export async function getAllResources(userId) {
-  if (!userId) throw new Error("userId required");
+export async function getAllResources(user) {
+  const userId = user?._id || user?.id || null;
+  if (!userId) throw new Error("user required");
 
-  return Resource.find({ createdBy: userId }) // ✅ FILTER
-    .populate("space", "name slug")
+  const query = {};
+
+  if (user?.role !== "super_admin") {
+    const spaces = await Space.find({ owner: userId }).select("_id").lean();
+    const spaceIds = spaces.map((space) => space._id);
+
+    if (!spaceIds.length) {
+      return [];
+    }
+
+    query.space = { $in: spaceIds };
+  }
+
+  return Resource.find(query)
+    .populate("space", "name slug owner address status isPublished")
     .sort({ createdAt: -1 })
     .exec();
 }

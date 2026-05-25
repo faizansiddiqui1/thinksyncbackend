@@ -1,14 +1,22 @@
-// requireSuperAdmin.routes.js
-
 import express from "express";
-import { requireAuth } from "../middlewares/auth";
-import { requireSuperAdmin } from "../middlewares/superadmin";
-import { updateDefaultKycConfig, updateGlobalKycConfig, updateKycConfig } from "../controllers/super_admin_controllers/adminhandle.controller.js";
-
+import { requireAuth } from "../middlewares/auth.js";
+import { requireSuperAdmin } from "../middlewares/superadmin.js";
+import {
+  updateDefaultKycConfig,
+  updateGlobalKycConfig,
+  updateKycConfig,
+} from "../controllers/super_admin_controllers/adminhandle.controller.js";
+import { getMarketplaceSnapshot } from "../controllers/super_admin_controllers/marketplace.controller.js";
 
 const router = express.Router();
 
-// Edit config by admin id specifig admin config by super admin
+router.get(
+  "/super-admin/marketplace/snapshot",
+  requireAuth,
+  requireSuperAdmin,
+  getMarketplaceSnapshot,
+);
+
 router.patch(
   "/super-admin/kyc-config/:adminId",
   requireAuth,
@@ -16,19 +24,18 @@ router.patch(
   updateKycConfig,
 );
 
-// update all existing admin config by super admin
 router.patch(
   "/super-admin/global-kyc-config",
   requireAuth,
   requireSuperAdmin,
-  updateGlobalKycConfig
+  updateGlobalKycConfig,
 );
 
-// Set default config for upcoming admins
 router.patch(
-    "/super-admin/default-kyc-config",
-    requireAuth,
-    requireSuperAdmin,
-    updateDefaultKycConfig
-)
+  "/super-admin/default-kyc-config",
+  requireAuth,
+  requireSuperAdmin,
+  updateDefaultKycConfig,
+);
 
+export default router;

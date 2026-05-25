@@ -264,6 +264,12 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
     const {
       status,
       kycStatus = "all",
+      paymentStatus,
+      requestedOwnerId = null,
+      spaceId = null,
+      startDate,
+      endDate,
+      isSuperAdmin = false,
       page = 1,
       limit = 20,
       upcoming = false,
@@ -273,35 +279,51 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
 
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.min(Math.max(1, Number(limit) || 20), 100);
+    const now = new Date();
+    const query = {};
 
-    // Owner spaces
-    const spaces = await Space.find({ owner: ownerId }).select("_id").lean();
+    let scopedSpaceIds = [];
 
-    const spaceIds = spaces.map((s) => s._id);
+    if (spaceId) {
+      scopedSpaceIds = [spaceId];
+    } else if (!isSuperAdmin || requestedOwnerId) {
+      const spaceQuery =
+        isSuperAdmin && requestedOwnerId
+          ? { owner: requestedOwnerId }
+          : { owner: ownerId };
 
-    if (!spaceIds.length) {
-      return {
-        success: true,
-        data: {
-          bookings: [],
-          stats: {},
-          pagination: {
-            page: pageNum,
-            limit: limitNum,
-            total: 0,
-            pages: 0,
+      const spaces = await Space.find(spaceQuery).select("_id").lean();
+      scopedSpaceIds = spaces.map((space) => space._id);
+
+      if (!scopedSpaceIds.length) {
+        return {
+          success: true,
+          data: {
+            bookings: [],
+            stats: {},
+            pagination: {
+              page: pageNum,
+              limit: limitNum,
+              total: 0,
+              pages: 0,
+            },
           },
-        },
-      };
+        };
+      }
     }
 
-    const now = new Date();
-
-    const query = {
-      space: { $in: spaceIds },
-    };
+    if (scopedSpaceIds.length) {
+      query.space = { $in: scopedSpaceIds };
+    }
 
     if (status) query.status = status;
+    if (paymentStatus) query["payment.status"] = paymentStatus;
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
 
     if (upcoming) {
       query.startDateTime = { $gt: now };
@@ -319,15 +341,20 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       };
     }
 
-    // ✅ FULL POPULATE
     const rawBookings = await Booking.find(query)
       .populate({
         path: "space",
-        select: "name slug address startingPrice owner",
-        populate: {
-          path: "media",
-          select: "images video",
-        },
+        select: "name slug address startingPrice owner status isPublished",
+        populate: [
+          {
+            path: "media",
+            select: "images video",
+          },
+          {
+            path: "owner",
+            select: "username email phoneNumber kyc role",
+          },
+        ],
       })
       .populate({
         path: "resources.resourceId",
@@ -355,26 +382,18 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       })
       .lean();
 
-    // ✅ ENRICH
     const enriched = rawBookings.map((b) => {
       const rawKycStatus = b?.user?.userId?.kyc?.status || "not_submitted";
-
       const normalizedKyc = normalizeKycStatus(rawKycStatus);
-
       const startDateTime = new Date(b.startDateTime);
       const endDateTime = new Date(b.endDateTime);
-
       const holdExpiresAt = b.holdExpiresAt ? new Date(b.holdExpiresAt) : null;
-
       const startMs = startDateTime.getTime() - now.getTime();
-
       const endMs = endDateTime.getTime() - now.getTime();
-
       const holdMs = holdExpiresAt
         ? holdExpiresAt.getTime() - now.getTime()
         : null;
 
-      // ✅ IMAGE LOGIC SAME AS getMyBookings
       const resourceWithImage = b.resources?.find(
         (r) =>
           r.resourceId &&
@@ -389,103 +408,75 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
 
       return {
         ...b,
-
-        // ✅ main image
         displayImage: resourceImage || spaceImage || null,
-
         user: {
           ...b.user,
-
           name: b?.user?.userId?.username || b?.user?.name || "-",
-
           email: b?.user?.userId?.email || b?.user?.email || "-",
-
           phoneNumber:
             b?.user?.userId?.phoneNumber || b?.user?.phoneNumber || "-",
-
           profileImage: b?.user?.userId?.profileImage || null,
-
           kycStatus: rawKycStatus,
-
           kycCompleted: isKycCompleted(rawKycStatus),
-
           kycNormalizedStatus: normalizedKyc,
         },
-
         timers: {
           startsInMs: startMs,
           endsInMs: endMs,
           holdExpiresInMs: holdMs,
-
           isUpcoming: startMs > 0,
-
           isActive: startMs <= 0 && endMs >= 0,
-
           isExpiredHold:
             b.status === "pending_hold" && holdMs !== null && holdMs <= 0,
         },
       };
     });
 
-    // KYC FILTER
     const filteredByKyc =
       kycStatus && kycStatus !== "all"
         ? enriched.filter((b) => matchesKycFilter(b.user?.kycStatus, kycStatus))
         : enriched;
 
-    // STATS
     const stats = {
       totalBookings: enriched.length,
-
       confirmed: enriched.filter((b) => b.status === "confirmed").length,
-
       pending: enriched.filter((b) => b.status === "pending").length,
-
       cancelled: enriched.filter((b) => b.status === "cancelled").length,
-
       completed: enriched.filter((b) => b.status === "completed").length,
-
       expired: enriched.filter((b) => b.status === "expired").length,
-
       upcoming: enriched.filter((b) => new Date(b.startDateTime) > now).length,
-
       active: enriched.filter(
         (b) =>
           new Date(b.startDateTime) <= now && new Date(b.endDateTime) >= now,
       ).length,
-
-      kycCompleted: enriched.filter((b) => isKycCompleted(b.user?.kycStatus))
-        .length,
-
+      kycCompleted: enriched.filter((b) => isKycCompleted(b.user?.kycStatus)).length,
       kycNotCompleted: enriched.filter(
         (b) => !isKycCompleted(b.user?.kycStatus),
       ).length,
     };
 
-    // PAGINATION
     const total = filteredByKyc.length;
-
     const pages = Math.ceil(total / limitNum);
-
     const start = (pageNum - 1) * limitNum;
-
     const paginated = filteredByKyc.slice(start, start + limitNum);
 
     return {
       success: true,
       data: {
         bookings: paginated,
-
         stats,
-
         filters: {
           status: status || "all",
           kycStatus: kycStatus || "all",
+          paymentStatus: paymentStatus || "all",
+          requestedOwnerId: requestedOwnerId || "all",
+          spaceId: spaceId || "all",
+          startDate: startDate || null,
+          endDate: endDate || null,
           upcoming,
           past,
           active,
         },
-
         pagination: {
           page: pageNum,
           limit: limitNum,
