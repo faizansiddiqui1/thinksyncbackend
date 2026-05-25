@@ -139,7 +139,7 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
         throw new Error("Cashfree payment_session_id missing");
       }
     } else if (gatewayName === "razorpay") {
-      const instance = razorpayService.createRazorpayInstance(
+      const instance = await razorpayService.createRazorpayInstance(
         gatewayResolved.credentials,
       );
 

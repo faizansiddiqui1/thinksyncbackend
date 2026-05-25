@@ -1,52 +1,147 @@
-import rateLimit from 'express-rate-limit';
+import { getPlatformConfigValue } from "../services/platformConfigResolver.service.js";
 
-export const generalRateLimiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 900000),
-  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 100),
-  message: 'Too many requests, please try again later.',
-  
-   keyGenerator: (req) => {
-    return req.ip;
+function getClientKey(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    "anonymous"
+  );
+}
+
+function sendRateLimitResponse(res, message) {
+  if (typeof message === "string") {
+    return res.status(429).json({ message });
+  }
+
+  return res.status(429).json(
+    message || {
+      success: false,
+      error: "Too many requests, please try again later",
+    },
+  );
+}
+
+function createDynamicRateLimiter({
+  windowKey,
+  maxKey,
+  defaultWindowMs,
+  defaultMax,
+  message,
+  keyGenerator = getClientKey,
+}) {
+  const store = new Map();
+
+  return async (req, res, next) => {
+    try {
+      const tasks = [
+        windowKey
+          ? getPlatformConfigValue(windowKey, { defaultValue: defaultWindowMs })
+          : Promise.resolve(defaultWindowMs),
+        maxKey
+          ? getPlatformConfigValue(maxKey, { defaultValue: defaultMax })
+          : Promise.resolve(defaultMax),
+      ];
+      const [windowMsValue, maxValue] = await Promise.all(tasks);
+
+      const windowMs = Number(windowMsValue || defaultWindowMs);
+      const max = Number(maxValue || defaultMax);
+      const now = Date.now();
+      const key = keyGenerator(req);
+      const current = store.get(key);
+
+      let record = current;
+      if (!record || record.resetAt <= now) {
+        record = {
+          count: 0,
+          resetAt: now + windowMs,
+        };
+      }
+
+      record.count += 1;
+      store.set(key, record);
+
+      if (record.count === 1 || record.count % 50 === 0) {
+        for (const [entryKey, entryValue] of store.entries()) {
+          if (entryValue.resetAt <= now) {
+            store.delete(entryKey);
+          }
+        }
+      }
+
+      const retryAfter = Math.max(
+        Math.ceil((record.resetAt - now) / 1000),
+        0,
+      );
+
+      res.setHeader("X-RateLimit-Limit", String(max));
+      res.setHeader(
+        "X-RateLimit-Remaining",
+        String(Math.max(max - record.count, 0)),
+      );
+      res.setHeader(
+        "X-RateLimit-Reset",
+        String(Math.ceil(record.resetAt / 1000)),
+      );
+
+      if (record.count > max) {
+        res.setHeader("Retry-After", String(retryAfter));
+        return sendRateLimitResponse(res, message);
+      }
+
+      return next();
+    } catch (error) {
+      console.error("Dynamic rate limiter error:", error?.message || error);
+      return next();
+    }
+  };
+}
+
+export const generalRateLimiter = createDynamicRateLimiter({
+  windowKey: "RATE_LIMIT_WINDOW_MS",
+  maxKey: "RATE_LIMIT_MAX_REQUESTS",
+  defaultWindowMs: 15 * 60 * 1000,
+  defaultMax: 100,
+  message: "Too many requests, please try again later.",
+});
+
+export const otpRateLimiter = createDynamicRateLimiter({
+  windowKey: "RATE_LIMIT_WINDOW_MS",
+  maxKey: "OTP_RATE_LIMIT_MAX",
+  defaultWindowMs: 15 * 60 * 1000,
+  defaultMax: 5,
+  message: "Too many OTP requests, please try again later.",
+});
+
+export const generalLimiter = createDynamicRateLimiter({
+  windowKey: "RATE_LIMIT_WINDOW_MS",
+  maxKey: "RATE_LIMIT_MAX_REQUESTS",
+  defaultWindowMs: 15 * 60 * 1000,
+  defaultMax: 100,
+  message: {
+    success: false,
+    error: "Too many requests, please try again later",
   },
 });
 
-
-export const otpRateLimiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 900000),
-  max: Number(process.env.OTP_RATE_LIMIT_MAX || 5),
-  message: 'Too many OTP requests, please try again later.'
-});
-
-
-export const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+export const searchLimiter = createDynamicRateLimiter({
+  windowKey: null,
+  maxKey: null,
+  defaultWindowMs: 1 * 60 * 1000,
+  defaultMax: 30,
   message: {
     success: false,
-    error: 'Too many requests, please try again later'
+    error: "Too many search requests, please try again later",
   },
-  standardHeaders: true,
-  legacyHeaders: false
 });
 
-export const searchLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 30,
+export const bookingLimiter = createDynamicRateLimiter({
+  windowKey: null,
+  maxKey: null,
+  defaultWindowMs: 60 * 60 * 1000,
+  defaultMax: 10,
   message: {
     success: false,
-    error: 'Too many search requests, please try again later'
-  }
+    error: "Too many booking attempts, please try again later",
+  },
 });
-
-export const bookingLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10,
-  message: {
-    success: false,
-    error: 'Too many booking attempts, please try again later'
-  }
-});
-
-
-
-

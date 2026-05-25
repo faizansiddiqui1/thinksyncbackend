@@ -10,8 +10,27 @@ import { isEmail } from "../utils/validatorUtils.js";
 import { isNewDevice } from "../utils/helper.js";
 import { sendNewDeviceLoginAlert } from "./alert.service.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
+import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
-const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
+async function getAuthRuntimeConfig() {
+  const values = await getPlatformConfigValues([
+    "OTP_EXPIRY_MINUTES",
+    "OTP_MAX_RETRIES",
+    "JWT_ACCESS_SECRET",
+    "JWT_REFRESH_SECRET",
+    "JWT_ACCESS_EXPIRY",
+    "JWT_REFRESH_EXPIRY",
+  ]);
+
+  return {
+    otpExpiryMinutes: Number(values.OTP_EXPIRY_MINUTES || 10),
+    otpMaxRetries: Number(values.OTP_MAX_RETRIES || 3),
+    accessSecret: values.JWT_ACCESS_SECRET,
+    refreshSecret: values.JWT_REFRESH_SECRET,
+    accessExpiry: values.JWT_ACCESS_EXPIRY || "60m",
+    refreshExpiry: values.JWT_REFRESH_EXPIRY || "7d",
+  };
+}
 
 const resolveIdentifier = (identifier) => {
   if (!identifier) {
@@ -31,6 +50,8 @@ const resolveIdentifier = (identifier) => {
 };
 
 const issueOtp = async (user, target, isMail, tenant) => {
+  const authConfig = await getAuthRuntimeConfig();
+
   if (user.isActive === false) {
     throw new Error("Account disabled");
   }
@@ -43,7 +64,7 @@ const issueOtp = async (user, target, isMail, tenant) => {
   const otpHash = await bcrypt.hash(otp, 12);
 
   user.otpHash = otpHash;
-  user.otpExpires = Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000;
+  user.otpExpires = Date.now() + authConfig.otpExpiryMinutes * 60 * 1000;
   user.otpAttempts = 0;
   await user.save();
 
@@ -55,7 +76,7 @@ const issueOtp = async (user, target, isMail, tenant) => {
       html: `
         <p>
           Your OTP is <strong>${otp}</strong>.
-          It expires in ${OTP_EXPIRY_MINUTES} minutes.
+          It expires in ${authConfig.otpExpiryMinutes} minutes.
         </p>
       `,
     });
@@ -196,6 +217,8 @@ export const verifyOTPAndCreateTokens = async (
   sessionMeta,
   options = {},
 ) => {
+  const authConfig = await getAuthRuntimeConfig();
+
   if (!identifier || !otp) {
     throw new Error("Identifier and OTP required");
   }
@@ -222,7 +245,7 @@ export const verifyOTPAndCreateTokens = async (
   if (!isMatch) {
     user.otpAttempts += 1;
 
-    if (user.otpAttempts >= Number(process.env.OTP_MAX_RETRIES || 3)) {
+    if (user.otpAttempts >= authConfig.otpMaxRetries) {
       user.isLocked = true;
     }
 
@@ -249,35 +272,27 @@ export const verifyOTPAndCreateTokens = async (
     normalizedIntent,
   );
 
-  if (isAdminFlow) {
-    await ensureAdminProfile(user._id);
-    if (user.role !== "admin" && user.role !== "super_admin") {
-      user.role = "pending_admin";
+  if (normalizedIntent) {
+    if (!isAdminFlow) {
+      throw new Error("Invalid intent");
     }
-  } else if (normalizedIntent) {
-    throw new Error("Invalid intent");
-  }
 
-  if (normalizedIntent === "admin") {
     await ensureAdminProfile(user._id);
     if (user.role !== "admin" && user.role !== "super_admin") {
       user.role = "pending_admin";
     }
-  }
-  if (normalizedIntent && normalizedIntent !== "admin") {
-    throw new Error("Invalid intent");
   }
 
   const accessToken = jwt.sign(
     { userId: user._id },
-    process.env.JWT_ACCESS_SECRET,
-    { expiresIn: "60m" },
+    authConfig.accessSecret,
+    { expiresIn: authConfig.accessExpiry },
   );
 
   const refreshToken = jwt.sign(
     { userId: user._id },
-    process.env.JWT_REFRESH_SECRET,
-    { expiresIn: "7d" },
+    authConfig.refreshSecret,
+    { expiresIn: authConfig.refreshExpiry },
   );
 
   const refreshTokenHash = crypto

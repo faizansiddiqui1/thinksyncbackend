@@ -5,7 +5,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import dotenv from "dotenv";
+import "dotenv/config";
 import { errorHandler, notFound } from "./middlewares/errorHandler.js";
 import { generalRateLimiter } from "./middlewares/rateLimiter.js";
 import connectDB from "./config/database.js";
@@ -41,8 +41,6 @@ import AddonRoutes from "./routes/addon.routes.js"
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
-
-dotenv.config();
 const app = express();
 connectDB();
 

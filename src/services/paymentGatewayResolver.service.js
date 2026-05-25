@@ -2,17 +2,26 @@ import PaymentGateway from "../models/admin_models/paymentGateway.model.js";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import Tenant from "../models/admin_models/tenant.model.js";
 import { decrypt } from "../utils/crypto.util.js";
+import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
-function getPlatformGateway() {
-  const gateway = process.env.DEFAULT_PAYMENT_GATEWAY || "cashfree";
+async function getPlatformGateway() {
+  const values = await getPlatformConfigValues([
+    "DEFAULT_PAYMENT_GATEWAY",
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_SECRET",
+    "CASHFREE_CLIENT_ID",
+    "CASHFREE_CLIENT_SECRET",
+    "CASHFREE_ENV",
+  ]);
+  const gateway = values.DEFAULT_PAYMENT_GATEWAY || "cashfree";
 
   if (gateway === "razorpay") {
     return {
       source: "platform",
       gateway: "razorpay",
       credentials: {
-        keyId: process.env.RAZORPAY_KEY_ID,
-        keySecret: process.env.RAZORPAY_SECRET,
+        keyId: values.RAZORPAY_KEY_ID || "",
+        keySecret: values.RAZORPAY_SECRET || "",
       },
     };
   }
@@ -21,9 +30,9 @@ function getPlatformGateway() {
     source: "platform",
     gateway: "cashfree",
     credentials: {
-      appId: process.env.CASHFREE_APP_ID,
-      secret: process.env.CASHFREE_SECRET,
-      env: process.env.CASHFREE_ENV || "sandbox",
+      appId: values.CASHFREE_CLIENT_ID || "",
+      secret: values.CASHFREE_CLIENT_SECRET || "",
+      env: values.CASHFREE_ENV || "sandbox",
     },
   };
 }

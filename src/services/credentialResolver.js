@@ -1,51 +1,78 @@
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import TenantSecrets from "../models/admin_models/TenantSecrets.js";
+import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
 /**
  * Platform-level credentials
  */
-function getPlatformCredentials() {
+async function getPlatformCredentials() {
+  const values = await getPlatformConfigValues([
+    "CASHFREE_CLIENT_ID",
+    "CASHFREE_CLIENT_SECRET",
+    "CASHFREE_ENV",
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_SECRET",
+    "RAZORPAY_WEBHOOK_SECRET",
+    "DEFAULT_SMTP_HOST",
+    "DEFAULT_SMTP_PORT",
+    "DEFAULT_SMTP_USER",
+    "DEFAULT_SMTP_PASS",
+    "DEFAULT_FROM_NAME",
+    "DEFAULT_FROM_EMAIL",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_BUCKET_NAME",
+    "GOOGLE_API_KEY",
+    "PLACES_COMPONENTS",
+    "MSG91_AUTH_KEY",
+    "MSG91_SENDER_ID",
+    "MSG91_ROUTE",
+    "MSG91_COUNTRY",
+    "MSG91_OTP_TEMPLATE_ID",
+  ]);
+
   return {
     cashfree: {
-      clientId: process.env.CASHFREE_CLIENT_ID,
-      clientSecret: process.env.CASHFREE_CLIENT_SECRET,
-      env: process.env.CASHFREE_ENV,
+      clientId: values.CASHFREE_CLIENT_ID || "",
+      clientSecret: values.CASHFREE_CLIENT_SECRET || "",
+      env: values.CASHFREE_ENV || "sandbox",
       publicKeyPath: process.env.CASHFREE_PUBLIC_KEY_PATH,
     },
 
     razorpay: {
-      keyId: process.env.RAZORPAY_KEY_ID,
-      keySecret: process.env.RAZORPAY_SECRET,
-      webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET,
+      keyId: values.RAZORPAY_KEY_ID || "",
+      keySecret: values.RAZORPAY_SECRET || "",
+      webhookSecret: values.RAZORPAY_WEBHOOK_SECRET || "",
     },
 
     smtp: {
-      host: process.env.DEFAULT_SMTP_HOST,
-      port: process.env.DEFAULT_SMTP_PORT,
-      username: process.env.DEFAULT_SMTP_USER,
-      password: process.env.DEFAULT_SMTP_PASS,
-      fromName: process.env.DEFAULT_FROM_NAME,
-      fromEmail: process.env.DEFAULT_FROM_EMAIL,
+      host: values.DEFAULT_SMTP_HOST || "",
+      port: values.DEFAULT_SMTP_PORT || 587,
+      username: values.DEFAULT_SMTP_USER || "",
+      password: values.DEFAULT_SMTP_PASS || "",
+      fromName: values.DEFAULT_FROM_NAME || "",
+      fromEmail: values.DEFAULT_FROM_EMAIL || "",
     },
 
     aws: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      region: process.env.AWS_REGION,
-      bucketName: process.env.AWS_BUCKET_NAME,
+      accessKeyId: values.AWS_ACCESS_KEY_ID || "",
+      secretAccessKey: values.AWS_SECRET_ACCESS_KEY || "",
+      region: values.AWS_REGION || "",
+      bucketName: values.AWS_BUCKET_NAME || "",
     },
 
     google: {
-      apiKey: process.env.GOOGLE_API_KEY,
-      placesComponents: process.env.PLACES_COMPONENTS,
+      apiKey: values.GOOGLE_API_KEY || "",
+      placesComponents: values.PLACES_COMPONENTS || "country:IN",
     },
 
     msg91: {
-      authKey: process.env.MSG91_AUTH_KEY,
-      senderId: process.env.MSG91_SENDER_ID,
-      route: process.env.MSG91_ROUTE,
-      country: process.env.MSG91_COUNTRY,
-      templateId: process.env.MSG91_OTP_TEMPLATE_ID,
+      authKey: values.MSG91_AUTH_KEY || "",
+      senderId: values.MSG91_SENDER_ID || "",
+      route: values.MSG91_ROUTE || "",
+      country: values.MSG91_COUNTRY || "91",
+      templateId: values.MSG91_OTP_TEMPLATE_ID || "",
     },
   };
 }
@@ -66,7 +93,7 @@ export const getCredentials = async (req, type) => {
     throw new Error("Credential type is required");
   }
 
-  const platform = getPlatformCredentials();
+  const platform = await getPlatformCredentials();
   const platformCreds = platform[type];
 
   if (!platformCreds) {

@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import User from "../models/user_models/User.js";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import Role from "../models/super_admin_models/Role.js"; // adjust path
+import { getPlatformConfigValues } from "../services/platformConfigResolver.service.js";
 
 export const requireAuth = async (req, res, next) => {
   try {
@@ -12,7 +13,10 @@ export const requireAuth = async (req, res, next) => {
       return res.status(401).json({ message: "Auth required" });
 
     const token = header.split(" ")[1];
-    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    const { JWT_ACCESS_SECRET } = await getPlatformConfigValues([
+      "JWT_ACCESS_SECRET",
+    ]);
+    const payload = jwt.verify(token, JWT_ACCESS_SECRET);
     const user = await User.findById(payload.userId).select(
       "_id email role isActive customRoles phoneNumber username",
     );
@@ -33,7 +37,10 @@ export const optionalAuth = async (req, res, next) => {
     const header = req.headers.authorization;
     if (!header || !header.startsWith("Bearer ")) return next();
     const token = header.split(" ")[1];
-    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    const { JWT_ACCESS_SECRET } = await getPlatformConfigValues([
+      "JWT_ACCESS_SECRET",
+    ]);
+    const payload = jwt.verify(token, JWT_ACCESS_SECRET);
     const user = await User.findById(payload.userId).select(
       "_id email role isActive",
     );

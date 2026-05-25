@@ -9,6 +9,9 @@ import {
 } from "../../services/auth.service.js";
 import { getRefreshCookieOptions } from "../../utils/cookieUtils.js";
 import mongoose from "mongoose";
+import { getPlatformConfigValues } from "../../services/platformConfigResolver.service.js";
+
+
 
 export const sendOtpHandler = async (req, res) => {
   try {
@@ -34,6 +37,8 @@ export const sendOtpHandler = async (req, res) => {
     return res.status(400).json({ message: error.message });
   }
 };
+
+
 
 export const signup = async (req, res) => {
   try {
@@ -110,7 +115,13 @@ export const refreshAccessToken = async (req, res) => {
     }
 
     // 1️⃣ Verify JWT
-    const payload = jwt.verify(oldRefreshToken, process.env.JWT_REFRESH_SECRET);
+    const authConfig = await getPlatformConfigValues([
+      "JWT_ACCESS_SECRET",
+      "JWT_REFRESH_SECRET",
+      "JWT_ACCESS_EXPIRY",
+      "JWT_REFRESH_EXPIRY",
+    ]);
+    const payload = jwt.verify(oldRefreshToken, authConfig.JWT_REFRESH_SECRET);
 
     // 2️⃣ Hash incoming refresh token
     const oldTokenHash = crypto
@@ -137,14 +148,14 @@ export const refreshAccessToken = async (req, res) => {
     // 5️⃣ Generate NEW tokens
     const newAccessToken = jwt.sign(
       { userId: user._id },
-      process.env.JWT_ACCESS_SECRET,
-      { expiresIn: "60m" },
+      authConfig.JWT_ACCESS_SECRET,
+      { expiresIn: authConfig.JWT_ACCESS_EXPIRY || "60m" },
     );
 
     const newRefreshToken = jwt.sign(
       { userId: user._id },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: "7d" },
+      authConfig.JWT_REFRESH_SECRET,
+      { expiresIn: authConfig.JWT_REFRESH_EXPIRY || "7d" },
     );
 
     // 6️⃣ Store NEW refresh token (hashed)

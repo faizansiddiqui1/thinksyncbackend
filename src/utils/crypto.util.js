@@ -5,11 +5,13 @@ import crypto from "crypto";
 const ALGO = "aes-256-gcm";
 
 // 🔥 IMPORTANT: use hex
-const KEY = Buffer.from(process.env.CRYPTO_KEY || "", "hex");
+const rawKey = (process.env.CRYPTO_KEY || "").trim();
 
-if (KEY.length !== 32) {
-  throw new Error("CRYPTO_KEY must be 32 bytes (64 hex chars)");
+if (!/^[a-fA-F0-9]{64}$/.test(rawKey)) {
+  throw new Error("CRYPTO_KEY must be exactly 64 hex characters");
 }
+
+const KEY = Buffer.from(rawKey, "hex");
 
 export function encrypt(text) {
   const iv = crypto.randomBytes(12);

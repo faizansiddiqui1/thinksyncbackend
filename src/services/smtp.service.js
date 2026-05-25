@@ -1,11 +1,17 @@
 import { getCredentials } from "./credentialResolver.js";
+import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
 function normalizePort(port) {
   const n = Number(port);
   return Number.isFinite(n) && n > 0 ? n : 587;
 }
 
-function normalizeSMTP(creds = {}) {
+async function normalizeSMTP(creds = {}) {
+  const defaults = await getPlatformConfigValues([
+    "DEFAULT_FROM_NAME",
+    "DEFAULT_FROM_EMAIL",
+  ]);
+
   return {
     host: creds.host || "",
     port: normalizePort(creds.port),
@@ -15,10 +21,10 @@ function normalizeSMTP(creds = {}) {
         : normalizePort(creds.port) === 465,
     username: creds.username || "",
     password: creds.password || "",
-    fromName: creds.fromName || process.env.DEFAULT_FROM_NAME || "Your App",
+    fromName: creds.fromName || defaults.DEFAULT_FROM_NAME || "Your App",
     fromEmail:
       creds.fromEmail ||
-      process.env.DEFAULT_FROM_EMAIL ||
+      defaults.DEFAULT_FROM_EMAIL ||
       creds.username || "",
   };
 }
@@ -26,7 +32,7 @@ function normalizeSMTP(creds = {}) {
 export const getActiveSMTP = async (tenant) => {
   const creds = await getCredentials({ tenant }, "smtp");
 
-  const smtp = normalizeSMTP(creds);
+  const smtp = await normalizeSMTP(creds);
 
   if (!smtp.host || !smtp.username || !smtp.password) {
     throw new Error("SMTP credentials missing");

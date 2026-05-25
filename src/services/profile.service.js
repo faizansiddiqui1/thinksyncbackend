@@ -6,10 +6,23 @@ import { sendEmail } from "./mail.service.js";
 import { sendSMS } from "./sms.service.js";
 import { isEmail } from "../utils/validatorUtils.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
+import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
-const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
+async function getProfileOtpConfig() {
+  const values = await getPlatformConfigValues([
+    "OTP_EXPIRY_MINUTES",
+    "OTP_MAX_RETRIES",
+  ]);
+
+  return {
+    otpExpiryMinutes: Number(values.OTP_EXPIRY_MINUTES || 10),
+    otpMaxRetries: Number(values.OTP_MAX_RETRIES || 3),
+  };
+}
 
 export const sendProfileOtp = async (userId, identifier) => {
+  const otpConfig = await getProfileOtpConfig();
+
   if (!userId) throw new Error("User id required");
   if (!identifier) throw new Error("Identifier required");
 
@@ -34,7 +47,7 @@ export const sendProfileOtp = async (userId, identifier) => {
   const otpHash = await bcrypt.hash(otp, 12);
 
   user.otpHash = otpHash;
-  user.otpExpires = Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000;
+  user.otpExpires = Date.now() + otpConfig.otpExpiryMinutes * 60 * 1000;
   user.otpAttempts = 0;
 
   // store pending field (do not overwrite primary until verification)
@@ -53,7 +66,7 @@ export const sendProfileOtp = async (userId, identifier) => {
     await sendEmail({
       to: target,
       subject: "Verify your email",
-      html: `<p>Your verification code is <strong>${otp}</strong>. It expires in ${OTP_EXPIRY_MINUTES} minutes.</p>`,
+      html: `<p>Your verification code is <strong>${otp}</strong>. It expires in ${otpConfig.otpExpiryMinutes} minutes.</p>`,
     });
   } else {
     await sendSMS(target, otp);
@@ -63,6 +76,8 @@ export const sendProfileOtp = async (userId, identifier) => {
 };
 
 export const confirmProfileOtp = async (userId, identifier, otp) => {
+  const otpConfig = await getProfileOtpConfig();
+
   if (!userId) throw new Error("User id required");
   if (!identifier || !otp) throw new Error("Identifier and OTP required");
 
@@ -79,7 +94,7 @@ export const confirmProfileOtp = async (userId, identifier, otp) => {
   const isMatch = await bcrypt.compare(String(otp), user.otpHash);
   if (!isMatch) {
     user.otpAttempts = (user.otpAttempts || 0) + 1;
-    if (user.otpAttempts >= Number(process.env.OTP_MAX_RETRIES || 3)) {
+    if (user.otpAttempts >= otpConfig.otpMaxRetries) {
       user.isLocked = true;
     }
     await user.save();

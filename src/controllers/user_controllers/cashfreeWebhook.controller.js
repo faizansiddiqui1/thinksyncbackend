@@ -1,43 +1,46 @@
-import crypto from "crypto";
-import Booking from "../../models/user_models/Booking.js";
-import TempBooking from "../../models/user_models/TempBooking.js";
 import { finalizeTempBooking } from "../../services/bookingFinalize.service.js";
-
-const MAX_TIMESTAMP_DRIFT_MS = 5 * 60 * 1000; // 5 minutes - adjust if needed
+import { getPlatformConfigValues } from "../../services/platformConfigResolver.service.js";
 
 export const cashfreeWebhook = async (req, res) => {
   try {
-    console.log("🔥 WEBHOOK HIT");
-
     const data = JSON.parse(req.body.toString());
 
-    if (data.type !== "PAYMENT_SUCCESS_WEBHOOK")
+    if (data.type !== "PAYMENT_SUCCESS_WEBHOOK") {
       return res.status(200).send("ok");
+    }
 
     const orderId = data?.data?.order?.order_id;
+    if (!orderId) {
+      return res.status(200).send("ok");
+    }
 
-    console.log("ORDER:", orderId);
+    const runtimeConfig = await getPlatformConfigValues([
+      "CASHFREE_ENV",
+      "CASHFREE_CLIENT_ID",
+      "CASHFREE_CLIENT_SECRET",
+      "CASHFREE_BASE_URL_PROD",
+      "CASHFREE_BASE_URL_TEST",
+      "CASHFREE_API_VERSION",
+    ]);
 
-    // ✅ VERIFY FROM CASHFREE API (FINAL SAFE WAY)
+    const baseUrl =
+      runtimeConfig.CASHFREE_ENV === "prod" ||
+      runtimeConfig.CASHFREE_ENV === "production"
+        ? runtimeConfig.CASHFREE_BASE_URL_PROD
+        : runtimeConfig.CASHFREE_BASE_URL_TEST;
 
-    const response = await fetch(
-      `https://sandbox.cashfree.com/pg/orders/${orderId}`,
-      {
-        method: "GET",
-        headers: {
-          "x-client-id": process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET,
-          "x-api-version": "2023-08-01",
-        },
+    const response = await fetch(`${baseUrl}/pg/orders/${orderId}`, {
+      method: "GET",
+      headers: {
+        "x-client-id": runtimeConfig.CASHFREE_CLIENT_ID,
+        "x-client-secret": runtimeConfig.CASHFREE_CLIENT_SECRET,
+        "x-api-version": runtimeConfig.CASHFREE_API_VERSION || "2025-01-01",
       },
-    );
+    });
 
     const orderData = await response.json();
 
-    console.log("VERIFY:", orderData.order_status);
-
     if (orderData.order_status !== "PAID") {
-      console.log("❌ not paid");
       return res.status(200).send("ok");
     }
 
@@ -50,11 +53,9 @@ export const cashfreeWebhook = async (req, res) => {
       },
     });
 
-    console.log("🎉 BOOKING CONFIRMED:", orderId);
-
-    res.status(200).send("ok");
+    return res.status(200).send("ok");
   } catch (err) {
     console.error("Webhook error:", err);
-    res.status(500).send("error");
+    return res.status(500).send("error");
   }
 };
