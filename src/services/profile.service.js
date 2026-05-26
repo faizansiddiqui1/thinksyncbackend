@@ -2,7 +2,7 @@
 import User from "../models/user_models/User.js";
 import bcrypt from "bcryptjs";
 import { generateOTP } from "../utils/otpUtils.js";
-import { sendEmail } from "./mail.service.js";
+import { sendVerifyOtpEmail } from "./mail.service.js";
 import { sendSMS } from "./sms.service.js";
 import { isEmail } from "../utils/validatorUtils.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
@@ -63,10 +63,11 @@ export const sendProfileOtp = async (userId, identifier) => {
 
   // send OTP
   if (isMail) {
-    await sendEmail({
+    await sendVerifyOtpEmail({
       to: target,
-      subject: "Verify your email",
-      html: `<p>Your verification code is <strong>${otp}</strong>. It expires in ${otpConfig.otpExpiryMinutes} minutes.</p>`,
+      userName: user.username || "there",
+      otp,
+      otpExpiryMinutes: otpConfig.otpExpiryMinutes,
     });
   } else {
     await sendSMS(target, otp);

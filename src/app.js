@@ -39,6 +39,11 @@ import DocumentsRoutes from "./routes/spaceDocument.routes.js"
 
 import AddonRoutes from "./routes/addon.routes.js"
 import feedbackRoutes from "./routes/feedback.routes.js";
+import adminFeedbackRoutes from "./routes/adminFeedback.routes.js";
+import reviewRoutes from "./routes/review.routes.js";
+import adminMailTemplateRoutes from "./routes/adminMailTemplate.routes.js";
+import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
+import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
@@ -158,6 +163,9 @@ app.use("/api/addon", AddonRoutes)
 
 // visitor & booking feedback endpoints
 app.use("/api/feedback", feedbackRoutes);
+app.use("/api/admin/analytics", adminFeedbackRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/super-admin/mail-templates", adminMailTemplateRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)
@@ -181,6 +189,16 @@ if (process.env.NODE_ENV === "production") {
 }
 
 const PORT = process.env.PORT || 5000;
+
+ensureDefaultEmailTemplates()
+  .then(() => {
+    startBookingCompletionCron();
+  })
+  .catch((error) => {
+    console.error("email template init failed:", error.message);
+    startBookingCompletionCron();
+  });
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV || "development"}`);

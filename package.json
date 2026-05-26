@@ -41,8 +41,10 @@
     "mongoose": "^8.0.3",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
     "nodemailer": "^7.0.13",
     "razorpay": "^2.9.6",
+    "sanitize-html": "^2.17.4",
     "slugify": "^1.6.6"
   },
   "devDependencies": {

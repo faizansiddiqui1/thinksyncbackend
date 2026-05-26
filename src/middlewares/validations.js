@@ -130,24 +130,19 @@ export const bookingValidation = {
 
 export const reviewValidation = {
   create: [
-    body('space')
+    body('bookingId')
       .notEmpty()
-      .withMessage('Space ID is required'),
-
-    body('user.name')
-      .notEmpty()
-      .trim()
-      .withMessage('User name is required'),
+      .withMessage('Booking ID is required'),
 
     body('rating')
       .isInt({ min: 1, max: 5 })
       .withMessage('Rating must be between 1 and 5'),
 
-    body('reviewText')
+    body('comment')
       .notEmpty()
       .isLength({ min: 10, max: 1000 })
       .withMessage(
-        'Review text must be between 10 and 1000 characters'
+        'Review comment must be between 10 and 1000 characters'
       )
   ]
 };

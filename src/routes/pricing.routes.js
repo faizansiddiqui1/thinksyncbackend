@@ -2,7 +2,6 @@ import express from "express";
 import { createPricingPlan, deletePricingPlan, listAllPricingPlans, listPricingPlans, updatePricingPlan } from "../controllers/admin_controllers/pricing.controller.js";
 import {
   requireAdminAccess,
-  requireAdminApproved,
   requireAuth,
   requirePermission,
 } from "../middlewares/auth.js";
@@ -39,7 +38,6 @@ router.put(
   requireAuth,
   requireAdminAccess,
   requirePermission("pricing_plan", "update"),
-  requireAdminApproved,
   updatePricingPlan,
 );
 
@@ -48,7 +46,6 @@ router.delete(
   requireAuth,
   requireAdminAccess,
   requirePermission("pricing_plan", "delete"),
-  requireAdminApproved,
   deletePricingPlan,
 );
 

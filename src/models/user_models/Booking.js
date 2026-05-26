@@ -285,6 +285,11 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+
     holdExpiresAt: {
       type: Date,
       default: null,
@@ -401,6 +406,31 @@ const bookingSchema = new Schema(
         default: 0,
       },
     },
+
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "paid", "refunded", "failed"],
+      default: "pending",
+      index: true,
+    },
+
+    reviewMailSent: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    reviewSubmitted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    reviewNotificationPending: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -439,6 +469,26 @@ bookingSchema.methods.calculateDuration = function () {
 
 bookingSchema.pre("validate", async function (next) {
   try {
+    if (!this.payment) {
+      this.payment = {};
+    }
+
+    if (this.paymentStatus && !this.payment.status) {
+      this.payment.status = this.paymentStatus;
+    }
+
+    if (this.payment?.status) {
+      this.paymentStatus = this.payment.status;
+    }
+
+    if (this.status === "completed" && !this.completedAt) {
+      this.completedAt = new Date();
+    }
+
+    if (this.status !== "completed") {
+      this.completedAt = null;
+    }
+
     // only for new bookings
     if (!this.isNew) {
       return next();
@@ -614,7 +664,25 @@ bookingSchema.index({
 });
 
 bookingSchema.index({
+  paymentStatus: 1,
+  status: 1,
+  endDateTime: 1,
+});
+
+bookingSchema.index({
+  reviewMailSent: 1,
+  reviewSubmitted: 1,
+});
+
+bookingSchema.index({
   "invoice.invoiceNumber": 1,
+});
+
+bookingSchema.virtual("isReviewEligible").get(function () {
+  return (
+    this.status === "completed" &&
+    (this.paymentStatus === "paid" || this.payment?.status === "paid")
+  );
 });
 
 /* =========================================================

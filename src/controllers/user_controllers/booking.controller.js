@@ -121,7 +121,6 @@ export const verifyRazorpayPayment = async (req, res) => {
 export const getOwnerBookings = async (req, res) => {
   try {
     const isSuperAdmin = req.user?.role === "super_admin";
-    const ownerId = req.user._id;
 
     const {
       status,
@@ -138,7 +137,7 @@ export const getOwnerBookings = async (req, res) => {
       active,
     } = req.query;
 
-    const result = await bookingService.getOwnerBookings(ownerId, {
+    const result = await bookingService.getOwnerBookings(req.user, {
       status,
       kycStatus,
       paymentStatus,

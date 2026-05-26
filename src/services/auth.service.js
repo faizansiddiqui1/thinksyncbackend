@@ -1,10 +1,14 @@
 import User from "../models/user_models/User.js";
+import Role from "../models/super_admin_models/Role.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import { generateOTP } from "../utils/otpUtils.js";
-import { sendEmail } from "./mail.service.js";
+import {
+  sendOtpEmail,
+  sendWelcomeEmail,
+} from "./mail.service.js";
 import { sendSMS } from "./sms.service.js";
 import { isEmail } from "../utils/validatorUtils.js";
 import { isNewDevice } from "../utils/helper.js";
@@ -49,6 +53,17 @@ const resolveIdentifier = (identifier) => {
   return { isMail, email, phone };
 };
 
+const hasAssignedRbacPermissions = async (user) => {
+  if (!user?.customRoles?.length) {
+    return false;
+  }
+
+  const roles = await Role.find({ _id: { $in: user.customRoles }, isActive: true });
+  return roles.some(
+    (role) => Array.isArray(role.permissions) && role.permissions.length > 0,
+  );
+};
+
 const issueOtp = async (user, target, isMail, tenant) => {
   const authConfig = await getAuthRuntimeConfig();
 
@@ -69,16 +84,12 @@ const issueOtp = async (user, target, isMail, tenant) => {
   await user.save();
 
   if (isMail) {
-    await sendEmail({
+    await sendOtpEmail({
       tenant,
       to: target,
-      subject: "Your OTP Code",
-      html: `
-        <p>
-          Your OTP is <strong>${otp}</strong>.
-          It expires in ${authConfig.otpExpiryMinutes} minutes.
-        </p>
-      `,
+      userName: user.username || "there",
+      otp,
+      otpExpiryMinutes: authConfig.otpExpiryMinutes,
     });
   } else {
     await sendSMS(target, otp, { tenant });
@@ -188,8 +199,10 @@ export const sendOtp = async ({
     }
 
     const allowedRoles = ["pending_admin", "admin", "super_admin"];
+    const hasAdminRoleAccess = allowedRoles.includes(user.role);
+    const hasRbacAdminAccess = await hasAssignedRbacPermissions(user);
 
-    if (!allowedRoles.includes(user.role)) {
+    if (!hasAdminRoleAccess && !hasRbacAdminAccess) {
       throw new Error("You are not authorized for admin login");
     }
 
@@ -272,13 +285,29 @@ export const verifyOTPAndCreateTokens = async (
     normalizedIntent,
   );
 
+  const isAdminRoleUser = user.role === "admin" || user.role === "super_admin";
+  const isPendingAdminUser = user.role === "pending_admin";
+  const isCustomRbacUser = await hasAssignedRbacPermissions(user);
+
   if (normalizedIntent) {
     if (!isAdminFlow) {
       throw new Error("Invalid intent");
     }
 
-    await ensureAdminProfile(user._id);
-    if (user.role !== "admin" && user.role !== "super_admin") {
+    if (
+      !isAdminRoleUser &&
+      !isPendingAdminUser &&
+      !isCustomRbacUser &&
+      normalizedIntent !== "admin-signup"
+    ) {
+      throw new Error("Invalid intent");
+    }
+
+    if (isAdminRoleUser || normalizedIntent === "admin-signup") {
+      await ensureAdminProfile(user._id);
+    }
+
+    if (!isAdminRoleUser && normalizedIntent === "admin-signup") {
       user.role = "pending_admin";
     }
   }
@@ -299,6 +328,11 @@ export const verifyOTPAndCreateTokens = async (
     .createHash("sha256")
     .update(refreshToken)
     .digest("hex");
+
+  const shouldSendWelcomeEmail =
+    Boolean(user.email) &&
+    !user.lastLogin &&
+    !isAdminFlow;
 
   user.refreshTokens = user.refreshTokens || [];
 
@@ -323,6 +357,12 @@ export const verifyOTPAndCreateTokens = async (
   }
 
   await user.save();
+
+  if (shouldSendWelcomeEmail) {
+    sendWelcomeEmail({ user }).catch((error) => {
+      console.error("welcome email failed:", error.message);
+    });
+  }
 
   return {
     accessToken,

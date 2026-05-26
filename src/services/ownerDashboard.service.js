@@ -6,6 +6,7 @@ import Addon from "../models/admin_models/AddonSchema.js";
 import Booking from "../models/user_models/Booking.js";
 import Review from "../models/user_models/Review.js";
 import { getScopeOwnerId } from "./spaceAccess.service.js";
+import { getReviewInsightsForSpaceIds } from "./review.service.js";
 
 function startOfMonth(date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -128,6 +129,21 @@ export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
       recentBookings: [],
       recentSpaces: [],
       topSpaces: [],
+      reviewSummary: {
+        totalReviews: 0,
+        averageRating: 0,
+        publishedReviews: 0,
+        hiddenReviews: 0,
+        respondedReviews: 0,
+        ratingBreakdown: [
+          { rating: 5, count: 0 },
+          { rating: 4, count: 0 },
+          { rating: 3, count: 0 },
+          { rating: 2, count: 0 },
+          { rating: 1, count: 0 },
+        ],
+        recentReviews: [],
+      },
     };
   }
 
@@ -138,6 +154,7 @@ export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
     activeAddons,
     totalReviews,
     bookings,
+    reviewInsightsResult,
   ] = await Promise.all([
     PricingPlan.countDocuments({ space: { $in: spaceIds }, isActive: true }),
     Offer.countDocuments({ space: { $in: spaceIds }, isActive: true }),
@@ -148,6 +165,7 @@ export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
       .populate("space", "name slug address")
       .sort({ createdAt: -1 })
       .lean(),
+    getReviewInsightsForSpaceIds(spaceIds, { recentLimit: 5 }),
   ]);
 
   const now = new Date();
@@ -305,6 +323,17 @@ export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
       return right.bookings - left.bookings;
     })
     .slice(0, 6);
+  const reviewSummary = reviewInsightsResult?.success
+    ? reviewInsightsResult.data
+    : {
+        totalReviews,
+        averageRating,
+        publishedReviews: 0,
+        hiddenReviews: 0,
+        respondedReviews: 0,
+        ratingBreakdown: [],
+        recentReviews: [],
+      };
 
   return {
     metrics: {
@@ -331,5 +360,6 @@ export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
     recentBookings,
     recentSpaces,
     topSpaces,
+    reviewSummary,
   };
 }

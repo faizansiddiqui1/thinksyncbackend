@@ -1,6 +1,7 @@
 import Booking from "../models/user_models/Booking.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { redeemOffer } from "./offer.service.js";
+import { sendBookingConfirmationEmail } from "./mail.service.js";
 
 function getUserIdFromBookingData(bookingData) {
   return (
@@ -169,10 +170,17 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     // helpful debug
     console.log("✅ FINAL BOOKING RESOURCES:", finalBookingDoc.resources);
 
-    await Booking.create(finalBookingDoc);
+    const booking = await Booking.create(finalBookingDoc);
 
     await TempBooking.deleteOne({
       orderId: paymentInfo.reference,
+    });
+
+    sendBookingConfirmationEmail({ booking }).catch((error) => {
+      console.error(
+        "booking confirmation email failed:",
+        error.message,
+      );
     });
 
     return { success: true };

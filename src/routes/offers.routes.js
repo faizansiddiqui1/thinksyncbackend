@@ -10,7 +10,6 @@ import {
 } from "../controllers/admin_controllers/offer.controller.js";
 import {
   requireAdminAccess,
-  requireAdminApproved,
   requireAuth,
   requirePermission,
 } from "../middlewares/auth.js";
@@ -53,7 +52,6 @@ router.delete(
   requireAuth,
   requireAdminAccess,
   requirePermission("offers", "delete"),
-  requireAdminApproved,
   deleteOffer,
 );
 

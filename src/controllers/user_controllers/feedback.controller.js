@@ -6,7 +6,7 @@ import reviewReminderService from "../../services/reviewReminderService.js";
 export const submitVisitorFeedback = async (req, res) => {
   try {
     const payload = {
-      user: req.body.userId || null,
+      user: req.user ? req.user._id : null,
       sessionId: req.body.sessionId || "",
       issueType: req.body.issueType,
       feedbackMessage: req.body.feedbackMessage || "",
@@ -23,7 +23,8 @@ export const submitVisitorFeedback = async (req, res) => {
 
 export const submitBookingFeedback = async (req, res) => {
   try {
-    const { userId, bookingId, easeRating, feedbackText } = req.body;
+    const { bookingId, easeRating, feedbackText } = req.body;
+    const userId = req.user?._id || null;
 
     if (!userId || !bookingId || !easeRating) {
       return res.status(400).json({ success: false, error: "Missing required fields" });
@@ -71,7 +72,7 @@ export const getVisitorFeedbacks = async (req, res) => {
 
 export const triggerReviewReminders = async (req, res) => {
   try {
-    const result = await reviewReminderService.triggerReminders({ dryRun: false });
+    const result = await reviewReminderService.triggerReminders();
     return res.json({ success: true, data: result });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

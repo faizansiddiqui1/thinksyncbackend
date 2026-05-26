@@ -1,44 +1,85 @@
-import express from 'express';
-
+import express from "express";
 import {
+  addResponse,
   createReview,
+  deleteReview,
+  flagReview,
+  getAdminReviews,
+  getAdminReviewSummary,
+  getMyPendingReviews,
   getReview,
   getSpaceReviews,
   getUserReviews,
-  updateReview,
-  deleteReview,
-  addResponse,
   markHelpful,
-  flagReview,
-  togglePublish
-} from '../controllers/review.controller.js';
-
-import { reviewValidation } from '../middleware/validation.js';
+  moderateReview,
+  togglePublish,
+  updateReview,
+} from "../controllers/user_controllers/review.controller.js";
+import {
+  requireAdminAccess,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
+import { requireSuperAdmin } from "../middlewares/superadmin.js";
+import { reviewValidation } from "../middlewares/validations.js";
 
 const router = express.Router();
 
-/* =========================
-   Review Routes
-========================= */
+router.get("/me/pending", requireAuth, getMyPendingReviews);
 
-router.post('/', reviewValidation.create, createReview);
+router.get(
+  "/admin/list",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("review", "read"),
+  getAdminReviews,
+);
 
-router.get('/:id', getReview);
+router.get(
+  "/admin/summary",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("review", "read"),
+  getAdminReviewSummary,
+);
 
-router.get('/space/:spaceId', getSpaceReviews);
+router.post("/", requireAuth, reviewValidation.create, createReview);
 
-router.get('/user/:userId', getUserReviews);
+router.get("/space/:spaceId", getSpaceReviews);
 
-router.put('/:id', updateReview);
+router.get("/user/:userId", requireAuth, getUserReviews);
 
-router.delete('/:id', deleteReview);
+router.get("/:id", getReview);
 
-router.post('/:id/response', addResponse);
+router.put("/:id", requireAuth, updateReview);
 
-router.post('/:id/helpful', markHelpful);
+router.delete("/:id", requireAuth, deleteReview);
 
-router.post('/:id/flag', flagReview);
+router.post(
+  "/:id/response",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("review", "update"),
+  addResponse,
+);
 
-router.put('/:id/publish', togglePublish);
+router.post("/:id/helpful", requireAuth, markHelpful);
+
+router.post("/:id/flag", requireAuth, flagReview);
+
+router.put(
+  "/:id/publish",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("review", "update"),
+  togglePublish,
+);
+
+router.patch(
+  "/:id/moderation",
+  requireAuth,
+  requireSuperAdmin,
+  moderateReview,
+);
 
 export default router;

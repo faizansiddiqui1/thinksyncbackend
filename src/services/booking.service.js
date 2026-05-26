@@ -5,10 +5,29 @@ import { resolveGateway } from "../services/paymentGatewayResolver.service.js";
 import * as cashfreeService from "../services/cashfree.service.js";
 import * as razorpayService from "../services/razorpay.service.js";
 import { getTenantIdFromSpace } from "../utils/getTenantIdFromSpace.js";
+import { getScopeOwnerId } from "./spaceAccess.service.js";
 import mongoose from "mongoose";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
 import User from "../models/user_models/User.js";
+
+function withReviewState(booking) {
+  const paymentStatus =
+    booking?.paymentStatus || booking?.payment?.status || "pending";
+  const reviewEligible =
+    booking?.status === "completed" && paymentStatus === "paid";
+
+  return {
+    ...booking,
+    paymentStatus,
+    reviewEligible,
+    reviewMailSent: Boolean(booking?.reviewMailSent),
+    reviewSubmitted: Boolean(booking?.reviewSubmitted),
+    reviewNotificationPending: Boolean(
+      booking?.reviewNotificationPending,
+    ),
+  };
+}
 
 /* =========================
    Create Booking 
@@ -259,7 +278,7 @@ function matchesKycFilter(rawStatus, filter) {
   return raw === filter;
 }
 
-export const getOwnerBookings = async (ownerId, filters = {}) => {
+export const getOwnerBookings = async (user, filters = {}) => {
   try {
     const {
       status,
@@ -277,6 +296,8 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       active = false,
     } = filters;
 
+    const scopeOwnerId = !isSuperAdmin ? await getScopeOwnerId(user) : null;
+
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.min(Math.max(1, Number(limit) || 20), 100);
     const now = new Date();
@@ -285,12 +306,33 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
     let scopedSpaceIds = [];
 
     if (spaceId) {
+      if (!isSuperAdmin && scopeOwnerId) {
+        const allowedSpace = await Space.findOne({
+          _id: spaceId,
+          owner: scopeOwnerId,
+        }).select("_id").lean();
+
+        if (!allowedSpace) {
+          return {
+            success: true,
+            data: {
+              bookings: [],
+              stats: {},
+              pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: 0,
+                pages: 0,
+              },
+            },
+          };
+        }
+      }
       scopedSpaceIds = [spaceId];
     } else if (!isSuperAdmin || requestedOwnerId) {
-      const spaceQuery =
-        isSuperAdmin && requestedOwnerId
-          ? { owner: requestedOwnerId }
-          : { owner: ownerId };
+      const spaceQuery = isSuperAdmin && requestedOwnerId
+        ? { owner: requestedOwnerId }
+        : { owner: scopeOwnerId };
 
       const spaces = await Space.find(spaceQuery).select("_id").lean();
       scopedSpaceIds = spaces.map((space) => space._id);
@@ -409,6 +451,7 @@ export const getOwnerBookings = async (ownerId, filters = {}) => {
       return {
         ...b,
         displayImage: resourceImage || spaceImage || null,
+        ...withReviewState(b),
         user: {
           ...b.user,
           name: b?.user?.userId?.username || b?.user?.name || "-",
@@ -547,6 +590,7 @@ export const getMyBookings = async (userId, filters = {}) => {
       return {
         ...b,
         displayImage: resourceImage || spaceImage || null,
+        ...withReviewState(b),
       };
     });
 
@@ -592,7 +636,7 @@ export const getMyBookingById = async (userId, bookingId) => {
       return { success: false, error: "Booking not found" };
     }
 
-    return { success: true, data: booking };
+    return { success: true, data: withReviewState(booking.toObject()) };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -711,6 +755,14 @@ export const updateBookingStatus = async (id, status, notes = "") => {
       booking.invoice.invoiceDate = new Date();
     }
 
+    if (
+      status === "completed" &&
+      (booking.paymentStatus === "paid" || booking.payment?.status === "paid") &&
+      !booking.reviewSubmitted
+    ) {
+      booking.reviewNotificationPending = true;
+    }
+
     await booking.save();
     return { success: true, data: booking };
   } catch (error) {
@@ -806,6 +858,14 @@ export const checkOut = async (id) => {
     booking.checkOut.status = true;
     booking.checkOut.time = new Date();
     booking.status = "completed";
+
+    if (
+      (booking.paymentStatus === "paid" || booking.payment?.status === "paid") &&
+      !booking.reviewSubmitted
+    ) {
+      booking.reviewNotificationPending = true;
+    }
+
     await booking.save();
 
     return { success: true, data: booking };
@@ -830,6 +890,8 @@ export const updatePaymentStatus = async (id, paymentData) => {
       paidAt:
         paymentData.status === "paid" ? new Date() : booking.payment.paidAt,
     };
+    booking.paymentStatus =
+      paymentData.status || booking.paymentStatus || booking.payment?.status;
 
     if (paymentData.status === "paid") {
       booking.status = "confirmed";
