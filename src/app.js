@@ -38,6 +38,7 @@ import SeatingOption from "./routes/seatingOption.routes.js"
 import DocumentsRoutes from "./routes/spaceDocument.routes.js"
 
 import AddonRoutes from "./routes/addon.routes.js"
+import feedbackRoutes from "./routes/feedback.routes.js";
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
@@ -154,6 +155,9 @@ app.use("/api/location", CityRoutes)
 app.use("/api/seatingOption", SeatingOption);
 
 app.use("/api/addon", AddonRoutes)
+
+// visitor & booking feedback endpoints
+app.use("/api/feedback", feedbackRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)
