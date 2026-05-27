@@ -5,7 +5,7 @@ import { resolveGateway } from "../services/paymentGatewayResolver.service.js";
 import * as cashfreeService from "../services/cashfree.service.js";
 import * as razorpayService from "../services/razorpay.service.js";
 import { getTenantIdFromSpace } from "../utils/getTenantIdFromSpace.js";
-import { getScopeOwnerId } from "./spaceAccess.service.js";
+import { getCompanySpaceIds, getScopeOwnerId } from "./spaceAccess.service.js";
 import mongoose from "mongoose";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
@@ -296,6 +296,7 @@ export const getOwnerBookings = async (user, filters = {}) => {
       active = false,
     } = filters;
 
+    const companySpaceIds = await getCompanySpaceIds(user);
     const scopeOwnerId = !isSuperAdmin ? await getScopeOwnerId(user) : null;
 
     const pageNum = Math.max(1, Number(page) || 1);
@@ -306,11 +307,24 @@ export const getOwnerBookings = async (user, filters = {}) => {
     let scopedSpaceIds = [];
 
     if (spaceId) {
-      if (!isSuperAdmin && scopeOwnerId) {
-        const allowedSpace = await Space.findOne({
-          _id: spaceId,
-          owner: scopeOwnerId,
-        }).select("_id").lean();
+      if (!isSuperAdmin) {
+        let allowedSpace = null;
+
+        if (companySpaceIds?.length) {
+          allowedSpace = await Space.findOne({
+            _id: spaceId,
+            _id: { $in: companySpaceIds },
+          })
+            .select("_id")
+            .lean();
+        } else if (scopeOwnerId) {
+          allowedSpace = await Space.findOne({
+            _id: spaceId,
+            owner: scopeOwnerId,
+          })
+            .select("_id")
+            .lean();
+        }
 
         if (!allowedSpace) {
           return {
@@ -330,9 +344,15 @@ export const getOwnerBookings = async (user, filters = {}) => {
       }
       scopedSpaceIds = [spaceId];
     } else if (!isSuperAdmin || requestedOwnerId) {
-      const spaceQuery = isSuperAdmin && requestedOwnerId
-        ? { owner: requestedOwnerId }
-        : { owner: scopeOwnerId };
+      let spaceQuery = null;
+
+      if (isSuperAdmin && requestedOwnerId) {
+        spaceQuery = { owner: requestedOwnerId };
+      } else if (companySpaceIds?.length) {
+        spaceQuery = { _id: { $in: companySpaceIds } };
+      } else {
+        spaceQuery = { owner: scopeOwnerId };
+      }
 
       const spaces = await Space.find(spaceQuery).select("_id").lean();
       scopedSpaceIds = spaces.map((space) => space._id);

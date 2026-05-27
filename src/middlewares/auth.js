@@ -6,6 +6,22 @@ import AdminProfile from "../models/admin_models/AdminProfile.js";
 import Role from "../models/super_admin_models/Role.js"; // adjust path
 import { getPlatformConfigValues } from "../services/platformConfigResolver.service.js";
 
+const COMPANY_RESOURCE_PERMISSION_ALLOWLIST = new Set([
+  "dashboard_analytics",
+  "spaces",
+  "resources",
+  "pricing_plan",
+  "offers",
+  "addons",
+  "booking",
+  "review",
+  "feedback",
+]);
+
+function isCompanyUser(user = null) {
+  return Boolean(user?.companyId);
+}
+
 export const requireAuth = async (req, res, next) => {
   try {
     const header = req.headers.authorization;
@@ -18,7 +34,7 @@ export const requireAuth = async (req, res, next) => {
     ]);
     const payload = jwt.verify(token, JWT_ACCESS_SECRET);
     const user = await User.findById(payload.userId).select(
-      "_id email role isActive customRoles phoneNumber username",
+      "_id email role isActive customRoles phoneNumber username companyId",
     );
     if (!user || !user.isActive)
       return res
@@ -42,7 +58,7 @@ export const optionalAuth = async (req, res, next) => {
     ]);
     const payload = jwt.verify(token, JWT_ACCESS_SECRET);
     const user = await User.findById(payload.userId).select(
-      "_id email role isActive",
+      "_id email role isActive companyId",
     );
     if (user && user.isActive) req.user = user;
     return next();
@@ -167,6 +183,11 @@ export const requirePermission =
 
       // Super admin ko full access (bypass)
       if (user.role === "admin" || user.role === "super_admin") {
+        return next();
+      }
+
+      // Company users should be able to manage their assigned company spaces
+      if (isCompanyUser(user) && COMPANY_RESOURCE_PERMISSION_ALLOWLIST.has(resource)) {
         return next();
       }
 

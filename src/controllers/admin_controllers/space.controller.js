@@ -21,6 +21,7 @@ import * as mediaService from "../../services/spaceMedia.service.js";
 import {
   ensureSpaceAccess,
   getScopeOwnerId,
+  getCompanySpaceIds,
 } from "../../services/spaceAccess.service.js";
 
 export const createSpace = async (req, res) => {
@@ -126,7 +127,13 @@ export const getFullSpacesForOwner = async (req, res) => {
     const isSuperAdmin = req.user?.role === "super_admin";
     const query = {};
 
-    if (!isSuperAdmin) {
+    if (req.user?.companyId) {
+      const companySpaceIds = await getCompanySpaceIds(req.user);
+      if (!companySpaceIds?.length) {
+        return res.json({ items: [] });
+      }
+      query._id = { $in: companySpaceIds };
+    } else if (!isSuperAdmin) {
       query.owner = await getScopeOwnerId(req.user);
     } else if (req.query.ownerId) {
       query.owner = req.query.ownerId;
@@ -283,11 +290,14 @@ export const getAllSpaces = async (req, res) => {
   try {
     res.set("Cache-Control", "no-store");
 
+    const ownerId = req.user?.role === "super_admin" ? null : await getScopeOwnerId(req.user);
+    const spaceIds = req.user?.companyId ? await getCompanySpaceIds(req.user) : null;
+
     const spaces = await serviceGetAllSpaces(req.query, {
       limit: parseInt(req.query.limit) || 20,
       page: parseInt(req.query.page) || 1,
-      ownerId:
-        req.user?.role === "super_admin" ? null : await getScopeOwnerId(req.user),
+      ownerId,
+      spaceIds,
     });
 
     return res.status(200).json({
@@ -422,7 +432,12 @@ export const searchSpacesController = async (req, res) => {
 
     // 🔥 role-based filtering
     if (req.user.role !== "super_admin") {
-      filter.owner = await getScopeOwnerId(req.user);
+      if (req.user?.companyId) {
+        const companySpaceIds = await getCompanySpaceIds(req.user);
+        filter._id = { $in: companySpaceIds };
+      } else {
+        filter.owner = await getScopeOwnerId(req.user);
+      }
     }
 
     if (q) {

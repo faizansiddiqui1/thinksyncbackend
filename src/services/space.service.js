@@ -652,15 +652,21 @@ export const getAllSpaces = async (rawQuery = {}, options = {}) => {
 
   const q = {};
 
-  if (options.ownerId) {
-    q.owner = options.ownerId;
-
-    if (rawQuery.status === "DRAFT") {
-      q.isPublished = false;
-    } else if (rawQuery.status === "PUBLISHED") {
-      q.isPublished = true;
+  if (Array.isArray(options.spaceIds)) {
+    if (!options.spaceIds.length) {
+      return { items: [], meta: metaFor(0, page, limit) };
     }
+
+    q._id = { $in: options.spaceIds };
+  } else if (options.ownerId) {
+    q.owner = options.ownerId;
   } else {
+    q.isPublished = true;
+  }
+
+  if (rawQuery.status === "DRAFT") {
+    q.isPublished = false;
+  } else if (rawQuery.status === "PUBLISHED") {
     q.isPublished = true;
   }
 

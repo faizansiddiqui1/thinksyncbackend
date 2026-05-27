@@ -5,7 +5,7 @@ import Resource from "../models/admin_models/ResourceSchema.js";
 import Addon from "../models/admin_models/AddonSchema.js";
 import Booking from "../models/user_models/Booking.js";
 import Review from "../models/user_models/Review.js";
-import { getScopeOwnerId } from "./spaceAccess.service.js";
+import { getCompanySpaceIds, getScopeOwnerId } from "./spaceAccess.service.js";
 import { getReviewInsightsForSpaceIds } from "./review.service.js";
 
 function startOfMonth(date) {
@@ -88,12 +88,17 @@ function bookingStatusCounts(bookings = []) {
 }
 
 export async function getOwnerDashboardSnapshot(user, { months = 6 } = {}) {
+  const companySpaceIds = await getCompanySpaceIds(user);
   const ownerId = await getScopeOwnerId(user);
-  if (!ownerId) {
+  if (!ownerId && !companySpaceIds?.length) {
     throw new Error("Unauthorized");
   }
 
-  const spaces = await Space.find({ owner: ownerId })
+  const query = companySpaceIds?.length
+    ? { _id: { $in: companySpaceIds } }
+    : { owner: ownerId };
+
+  const spaces = await Space.find(query)
     .populate("address.city", "name slug")
     .sort({ createdAt: -1 })
     .lean();

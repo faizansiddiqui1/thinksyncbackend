@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Space from "../models/admin_models/Space.js";
 import Role from "../models/super_admin_models/Role.js";
+import Company from "../models/super_admin_models/Company.model.js";
 
 function makeHttpError(status, message) {
   const error = new Error(message);
@@ -38,6 +39,46 @@ export async function getScopeOwnerId(user = null) {
   return scopedRole?.createdBy || getActorUserId(user);
 }
 
+export async function getCompanySpaceIds(user) {
+  if (!user?.companyId) return [];
+
+  const company = await Company.findById(user.companyId)
+    .select("spaces assignedSpaceId employees.user employees.spaces owner")
+    .lean();
+
+  if (!company) return [];
+
+  const ids = new Set();
+
+  if (company.assignedSpaceId) {
+    ids.add(String(company.assignedSpaceId));
+  }
+
+  if (Array.isArray(company.spaces)) {
+    company.spaces.forEach((spaceId) => {
+      if (spaceId) ids.add(String(spaceId));
+    });
+  }
+
+  const employee = Array.isArray(company.employees)
+    ? company.employees.find((item) => String(item.user) === String(user._id))
+    : null;
+
+  if (employee?.spaces?.length) {
+    employee.spaces.forEach((spaceId) => {
+      if (spaceId) ids.add(String(spaceId));
+    });
+  }
+
+  return Array.from(ids).map((id) => new mongoose.Types.ObjectId(id));
+}
+
+export async function hasCompanySpaceAccess(user, spaceId) {
+  if (!user?.companyId) return false;
+  const companySpaceIds = await getCompanySpaceIds(user);
+  return companySpaceIds.some((id) => String(id) === String(spaceId));
+}
+
 export async function ensureSpaceAccess(
   spaceId,
   user,
@@ -53,13 +94,16 @@ export async function ensureSpaceAccess(
   }
 
   if (!isSuperAdminUser(user)) {
-    const actorId = await getScopeOwnerId(user);
-    if (!actorId) {
-      throw makeHttpError(401, "Unauthorized");
-    }
+    const hasCompanyAccess = await hasCompanySpaceAccess(user, spaceId);
+    if (!hasCompanyAccess) {
+      const actorId = await getScopeOwnerId(user);
+      if (!actorId) {
+        throw makeHttpError(401, "Unauthorized");
+      }
 
-    if (String(space.owner) !== String(actorId)) {
-      throw makeHttpError(403, "You do not have access to this space");
+      if (String(space.owner) !== String(actorId)) {
+        throw makeHttpError(403, "You do not have access to this space");
+      }
     }
   }
 
@@ -69,6 +113,11 @@ export async function ensureSpaceAccess(
 export async function getOwnedSpaceIds(user) {
   if (isSuperAdminUser(user)) {
     return null;
+  }
+
+  if (user?.companyId) {
+    const companySpaceIds = await getCompanySpaceIds(user);
+    return companySpaceIds;
   }
 
   const actorId = await getScopeOwnerId(user);
