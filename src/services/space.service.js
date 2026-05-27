@@ -17,6 +17,7 @@ import SpaceDocument from "../models/admin_models/SpaceDocument.js";
 
 import { getEffectiveDocumentsBySpace } from "./spaceDocument.service.js";
 import Addon from "../models/admin_models/AddonSchema.js";
+import { hasCompanySpaceAccess } from "./spaceAccess.service.js";
 
 const ALLOWED_FIELDS = [
   "name",
@@ -959,7 +960,7 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
 // ===================================================
 // FETCH SPACE DETAILS BY SLUG
 // ===================================================
-export const fetchSpaceDetailsBySlug = async (slug) => {
+export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
   try {
     if (!slug) {
       throw new Error("Slug is required");
@@ -978,6 +979,15 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
     }
 
     const spaceId = spaceDoc._id;
+    const normalizedType = normalizeSpaceType(spaceDoc.spaceType);
+    const isLongTermCowork =
+      normalizedType === "cowork_space" && Boolean(spaceDoc?.listingModes?.longTerm);
+    const isCompanyManagedWorkspace =
+      normalizedType === "private_office" || isLongTermCowork;
+    const hasInternalWorkspaceAccess =
+      user?.companyId && isCompanyManagedWorkspace
+        ? await hasCompanySpaceAccess(user, spaceId)
+        : false;
 
     const [
       resources,
@@ -1071,14 +1081,24 @@ export const fetchSpaceDetailsBySlug = async (slug) => {
 
     return {
       ...spaceDoc,
-      resources: resources || [],
+      resources:
+        isCompanyManagedWorkspace && !hasInternalWorkspaceAccess
+          ? []
+          : resources || [],
       pricingPlans: pricingPlansSnapshot || [],
       offers: offers || [],
       media: normalizedMedia,
       virtualOfficePlans: groupedVirtualOfficePlans || {},
       seatingOptions: seatingOptions || [],
-      addons: addons || [],
+      addons:
+        isCompanyManagedWorkspace && !hasInternalWorkspaceAccess
+          ? []
+          : addons || [],
       documents: documents || [],
+      workspaceAccess: {
+        isCompanyManagedWorkspace,
+        hasInternalWorkspaceAccess: Boolean(hasInternalWorkspaceAccess),
+      },
     };
   } catch (error) {
     console.error("[fetchSpaceDetailsBySlug]", error);

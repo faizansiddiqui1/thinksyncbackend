@@ -24,8 +24,19 @@ import {
   getCompanySpaceIds,
 } from "../../services/spaceAccess.service.js";
 
+function isCompanyWorkspaceActor(user) {
+  return Boolean(user?.companyId);
+}
+
 export const createSpace = async (req, res) => {
   try {
+    if (isCompanyWorkspaceActor(req.user)) {
+      return res.status(403).json({
+        error:
+          "Company admins can only manage assigned spaces. Listing creation is disabled.",
+      });
+    }
+
     const tenant = req.context?.tenant || null;
 
     const space = await serviceCreateSpace(
@@ -242,6 +253,13 @@ export const getFullSpacesForOwner = async (req, res) => {
 
 export const publishSpaceController = async (req, res) => {
   try {
+    if (isCompanyWorkspaceActor(req.user)) {
+      return res.status(403).json({
+        message:
+          "Company admins cannot publish marketplace listings.",
+      });
+    }
+
     const space = await ensureSpaceAccess(req.params.id, req.user);
 
     if (!space) {
@@ -272,6 +290,13 @@ export const publishSpaceController = async (req, res) => {
 
 export const unpublishSpaceController = async (req, res) => {
   try {
+    if (isCompanyWorkspaceActor(req.user)) {
+      return res.status(403).json({
+        message:
+          "Company admins cannot change public publishing controls.",
+      });
+    }
+
     const space = await ensureSpaceAccess(req.params.id, req.user);
     if (!space) return res.status(404).json({ message: "Not found" });
 
@@ -314,6 +339,13 @@ export const getAllSpaces = async (req, res) => {
 
 export const updateSpace = async (req, res) => {
   try {
+    if (isCompanyWorkspaceActor(req.user)) {
+      return res.status(403).json({
+        message:
+          "Company admins cannot edit marketplace listing details.",
+      });
+    }
+
     await ensureSpaceAccess(req.params.id, req.user);
 
     const space = await serviceUpdateSpace(
@@ -334,6 +366,13 @@ export const updateSpace = async (req, res) => {
 
 export const deleteSpace = async (req, res) => {
   try {
+    if (isCompanyWorkspaceActor(req.user)) {
+      return res.status(403).json({
+        message:
+          "Company admins cannot delete marketplace listings.",
+      });
+    }
+
     await ensureSpaceAccess(req.params.id, req.user);
     const space = await serviceDeleteSpace(req.params.id);
     return res.status(200).json({
@@ -400,7 +439,7 @@ export const getSpaceDetailsBySlug = async (req, res) => {
       });
     }
 
-    const data = await fetchSpaceDetailsBySlug(slug);
+    const data = await fetchSpaceDetailsBySlug(slug, req.user || null);
 
     return res.status(200).json({
       success: true,

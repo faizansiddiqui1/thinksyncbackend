@@ -56,9 +56,24 @@ export async function getAdminKycStatusHandler(req, res) {
     const cv = await CompanyVerification.findOne({ userId: user._id });
     const adminProfile = await AdminProfile.findOne({ owner: user._id });
 
-    const company = user.companyId
-      ? await Company.findById(user.companyId).lean()
+    const companyRecord = user.companyId
+      ? await Company.findById(user.companyId).populate([
+          {
+            path: "assignedSpaceId",
+            select: "name slug spaceType",
+          },
+          {
+            path: "spaces",
+            select: "name slug spaceType",
+          },
+          {
+            path: "employees.user",
+            select: "username email phoneNumber",
+          },
+        ])
       : null;
+
+    const company = companyRecord?.toObject?.() || companyRecord || null;
 
     // 🔥 FIXED accountType
     let accountType = "user";
@@ -71,7 +86,10 @@ export async function getAdminKycStatusHandler(req, res) {
       accountType = "company_admin";
       isCompanyAdmin = true;
     } else if (
-      company?.employees?.some((e) => e.user.toString() === user._id.toString())
+      company?.employees?.some(
+        (employee) =>
+          String(employee?.user?._id || employee?.user) === String(user._id),
+      )
     ) {
       accountType = "employee";
       isEmployee = true;
@@ -83,6 +101,56 @@ export async function getAdminKycStatusHandler(req, res) {
     const config = normalizeConfig(rawConfig);
 
     const userKycStatus = await svc.buildUserKycPayload(user._id);
+    const ownerAdminProfile =
+      company?.owner && String(company.owner) !== String(user._id)
+        ? await AdminProfile.findOne({ owner: company.owner }).lean()
+        : adminProfile?.toObject?.() || adminProfile || null;
+
+    const assignedSpaces = [
+      company?.assignedSpaceId,
+      ...(Array.isArray(company?.spaces) ? company.spaces : []),
+    ].filter(Boolean);
+
+    const primaryWorkspace =
+      assignedSpaces.find((space) => space?.slug) || company?.assignedSpaceId || null;
+
+    const workspaceHome = primaryWorkspace?.slug
+      ? `/space/${primaryWorkspace.slug}`
+      : null;
+
+    const workspaceAccess = {
+      hasAssignedWorkspace: Boolean(primaryWorkspace),
+      canManageAssignedSpaces: Boolean(isCompanyAdmin || isEmployee),
+      allowedSpaceIds: assignedSpaces
+        .map((space) => space?._id || space?.id || space)
+        .filter(Boolean),
+    };
+
+    const whiteLabel = ownerAdminProfile?.whiteLabel || {
+      status: "none",
+      request: {},
+      domain: {},
+      permissions: {},
+      marketplaceMode: "marketplace",
+    };
+
+    const branding = {
+      companyName:
+        company?.displayName ||
+        company?.legalName ||
+        ownerAdminProfile?.company?.name ||
+        null,
+      requestedBrandName:
+        whiteLabel?.request?.businessName ||
+        ownerAdminProfile?.company?.name ||
+        null,
+      logoKey: ownerAdminProfile?.company?.placeholderImageKey || null,
+      logoUrl: null,
+      activeDomain: whiteLabel?.domain?.activeDomain || null,
+      customBrandingEnabled: Boolean(
+        whiteLabel?.permissions?.customBranding,
+      ),
+    };
 
     // 🔥 COMMON RESPONSE BASE
     const baseResponse = {
@@ -94,6 +162,10 @@ export async function getAdminKycStatusHandler(req, res) {
       isEmployee,
       companyId: user.companyId || null,
       company,
+      workspaceAccess,
+      workspaceHome,
+      whiteLabel,
+      branding,
 
       customRoles: user.customRoles || [],
       config,

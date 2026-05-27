@@ -36,6 +36,23 @@ export const createBooking = async (req, res) => {
   }
 };
 
+export const createInternalBooking = async (req, res) => {
+  try {
+    const result = await bookingService.createInternalWorkspaceBooking(
+      req.body,
+      req.user,
+    );
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.status(201).json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 export const verifyRazorpayPayment = async (req, res) => {
   try {
     const {

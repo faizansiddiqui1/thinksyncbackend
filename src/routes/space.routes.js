@@ -28,6 +28,7 @@ import {
   requireAdminAccess,
   requireAuth,
   requirePermission,
+  optionalAuth,
 } from "../middlewares/auth.js";
 
 const router = express.Router();
@@ -131,7 +132,7 @@ router.get(
 router.get("/spaces", getSpacesList);
 
 // For full details page data
-router.get("/space/:slug", getSpaceDetailsBySlug);
+router.get("/space/:slug", optionalAuth, getSpaceDetailsBySlug);
 
 
 // googel api

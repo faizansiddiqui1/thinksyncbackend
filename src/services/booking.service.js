@@ -5,7 +5,11 @@ import { resolveGateway } from "../services/paymentGatewayResolver.service.js";
 import * as cashfreeService from "../services/cashfree.service.js";
 import * as razorpayService from "../services/razorpay.service.js";
 import { getTenantIdFromSpace } from "../utils/getTenantIdFromSpace.js";
-import { getCompanySpaceIds, getScopeOwnerId } from "./spaceAccess.service.js";
+import {
+  getCompanySpaceIds,
+  getScopeOwnerId,
+  hasCompanySpaceAccess,
+} from "./spaceAccess.service.js";
 import mongoose from "mongoose";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
@@ -232,6 +236,193 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     };
   } catch (error) {
     console.error("createBooking error:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+};
+
+function normalizeBookingResources(resources = []) {
+  if (!Array.isArray(resources)) return [];
+
+  return resources
+    .map((resource) => {
+      const resourceId = resource?.resourceId || resource?._id || resource?.id;
+      if (!resourceId) return null;
+
+      return {
+        resourceId,
+        name: resource?.name || "",
+        type: resource?.type || "",
+        quantity: Number(resource?.quantity || resource?.qty || 1) || 1,
+        unitPrice: Number(resource?.unitPrice || resource?.price || 0) || 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getInternalPlanType(bookingType = "daily") {
+  const normalized = String(bookingType || "daily").toLowerCase();
+  if (normalized === "hourly") return "hourly";
+  if (normalized === "monthly") return "monthly";
+  return "daily";
+}
+
+export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
+  try {
+    if (!authUser?._id) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    if (!authUser?.companyId) {
+      return {
+        success: false,
+        error: "Internal workspace booking is only available for assigned company users",
+      };
+    }
+
+    const requestedUserId = bookingData?.userId || bookingData?.user?.userId || null;
+    if (requestedUserId && String(requestedUserId) !== String(authUser._id)) {
+      return {
+        success: false,
+        error: "You can only create internal bookings for your own account",
+      };
+    }
+
+    const spaceId = bookingData?.space;
+    if (!spaceId) {
+      return { success: false, error: "Space is required" };
+    }
+
+    const hasAccess = await hasCompanySpaceAccess(authUser, spaceId);
+    if (!hasAccess) {
+      return {
+        success: false,
+        error: "You do not have access to this workspace",
+      };
+    }
+
+    const space = await Space.findById(spaceId).select(
+      "_id name slug isPublished spaceType listingModes",
+    );
+    if (!space) {
+      return { success: false, error: "Space not found" };
+    }
+
+    const normalizedResources = normalizeBookingResources(bookingData?.resources);
+    if (!normalizedResources.length) {
+      return {
+        success: false,
+        error: "At least one resource is required for internal booking",
+      };
+    }
+
+    const startDateTime = bookingData?.startDateTime
+      ? new Date(bookingData.startDateTime)
+      : null;
+    const endDateTime = bookingData?.endDateTime
+      ? new Date(bookingData.endDateTime)
+      : null;
+
+    if (
+      !startDateTime ||
+      !endDateTime ||
+      Number.isNaN(startDateTime.getTime()) ||
+      Number.isNaN(endDateTime.getTime()) ||
+      endDateTime <= startDateTime
+    ) {
+      return {
+        success: false,
+        error: "Valid start and end time are required",
+      };
+    }
+
+    for (const resource of normalizedResources) {
+      const availability = await Booking.checkAvailability(
+        resource.resourceId,
+        startDateTime,
+        endDateTime,
+      );
+
+      if (!availability?.available) {
+        return {
+          success: false,
+          error: `${resource.name || "This resource"} is already reserved for the selected time`,
+        };
+      }
+    }
+
+    const subtotal =
+      Number(bookingData?.priceBreakdown?.basePrice || bookingData?.subtotal || 0) ||
+      normalizedResources.reduce(
+        (sum, resource) =>
+          sum + Number(resource.unitPrice || 0) * Number(resource.quantity || 1),
+        0,
+      );
+    const gstAmount = Number(bookingData?.priceBreakdown?.gstAmount || 0) || 0;
+    const totalAmount =
+      Number(bookingData?.priceBreakdown?.totalAmount || bookingData?.totalAmount || 0) ||
+      subtotal + gstAmount;
+    const paymentReference = `internal_${new mongoose.Types.ObjectId()}`;
+    const bookingType = String(bookingData?.bookingType || "daily").toLowerCase();
+
+    const booking = await Booking.create({
+      user: {
+        userId: authUser._id,
+        name: authUser.username || "",
+        email: authUser.email || "",
+        phone: authUser.phoneNumber || "",
+      },
+      space: spaceId,
+      spaceType: bookingData?.spaceType || space.spaceType || "resource",
+      resources: normalizedResources,
+      addons: [],
+      plan: {
+        planId: null,
+        type: getInternalPlanType(bookingType),
+      },
+      bookingType,
+      bookingDuration: {
+        startDate: bookingData?.bookingDuration?.startDate || startDateTime,
+        endDate: bookingData?.bookingDuration?.endDate || endDateTime,
+        startTime: bookingData?.bookingDuration?.startTime || null,
+        endTime: bookingData?.bookingDuration?.endTime || null,
+        totalDays: Number(bookingData?.bookingDuration?.totalDays || 0) || 0,
+        totalHours: Number(bookingData?.bookingDuration?.totalHours || 0) || 0,
+      },
+      startDateTime,
+      endDateTime,
+      timezone: bookingData?.timezone || "Asia/Kolkata",
+      priceBreakdown: {
+        basePrice: subtotal,
+        gstPercentage: Number(
+          bookingData?.priceBreakdown?.gstPercentage || 18,
+        ),
+        gstAmount,
+        deposit: Number(bookingData?.priceBreakdown?.deposit || 0) || 0,
+        discount: Number(bookingData?.priceBreakdown?.discount || 0) || 0,
+        totalAmount,
+      },
+      status: "confirmed",
+      payment: {
+        method: "internal",
+        status: "paid",
+        gateway: "internal_workspace",
+        reference: paymentReference,
+        paidAt: new Date(),
+      },
+      paymentStatus: "paid",
+      specialRequests: bookingData?.specialRequests || "",
+      notes: bookingData?.notes || "",
+      holdExpiresAt: null,
+    });
+
+    return {
+      success: true,
+      data: {
+        booking,
+      },
+    };
+  } catch (error) {
+    console.error("createInternalWorkspaceBooking error:", error);
     return { success: false, error: error.message || String(error) };
   }
 };

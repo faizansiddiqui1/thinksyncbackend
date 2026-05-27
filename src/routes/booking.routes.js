@@ -3,6 +3,7 @@ console.log("✅ BOOKING ROUTES REGISTERED");
 import express from "express";
 import {
   createBooking,
+  createInternalBooking,
   getBooking,
   getUserBookings,
   getSpaceBookings,
@@ -33,6 +34,7 @@ import Booking from "../models/user_models/Booking.js";
 const router = express.Router();
 
 router.post("/booking", createBooking);
+router.post("/booking/internal", requireAuth, createInternalBooking);
 
 
 

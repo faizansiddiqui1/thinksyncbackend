@@ -303,7 +303,7 @@ const bookingSchema = new Schema(
     payment: {
       method: {
         type: String,
-        enum: ["cash", "card", "upi", "netbanking", "wallet"],
+        enum: ["cash", "card", "upi", "netbanking", "wallet", "internal"],
       },
 
       status: {
