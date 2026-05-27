@@ -34,6 +34,8 @@ import Booking from "../models/user_models/Booking.js";
 const router = express.Router();
 
 router.post("/booking", createBooking);
+// alias for compatibility
+router.post("/bookings", createBooking);
 router.post("/booking/internal", requireAuth, createInternalBooking);
 
 
@@ -74,8 +76,12 @@ router.get("/space/:spaceId", getSpaceBookings);
 router.get("/space/:spaceId/stats", getBookingStats);
 
 router.put("/:id/status", updateBookingStatus);
+// compatibility alias: update full booking
+router.put("/bookings/:id", updateBookingStatus);
 
 router.post("/:id/cancel", cancelBooking);
+// alias for delete
+router.delete("/bookings/:id", cancelBooking);
 
 router.post("/:id/check-in", checkIn);
 

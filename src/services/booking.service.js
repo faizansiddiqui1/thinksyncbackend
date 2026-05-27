@@ -11,6 +11,7 @@ import {
   hasCompanySpaceAccess,
 } from "./spaceAccess.service.js";
 import mongoose from "mongoose";
+import * as googleCalendarService from "./googleCalendar.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
 import User from "../models/user_models/User.js";
@@ -414,6 +415,16 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       notes: bookingData?.notes || "",
       holdExpiresAt: null,
     });
+
+    // create calendar event for internal bookings if user has connected google
+    try {
+      const userId = authUser._id;
+      if (userId) {
+        await googleCalendarService.createEventForBooking(booking._id, userId);
+      }
+    } catch (err) {
+      console.error("google calendar create failed for internal booking:", err?.message || err);
+    }
 
     return {
       success: true,
@@ -975,6 +986,15 @@ export const updateBookingStatus = async (id, status, notes = "") => {
     }
 
     await booking.save();
+    // sync update to google calendar if exists
+    try {
+      const userId = booking.user?.userId || null;
+      if (userId && booking.googleEventId) {
+        await googleCalendarService.updateEventForBooking(booking._id, userId);
+      }
+    } catch (err) {
+      console.error("google calendar update failed:", err?.message || err);
+    }
     return { success: true, data: booking };
   } catch (error) {
     return { success: false, error: error.message };
@@ -1022,6 +1042,16 @@ export const cancelBooking = async (id, cancelledBy, reason = "") => {
     }
 
     await booking.save();
+    // delete calendar event if present
+    try {
+      const userId = booking.user?.userId || null;
+      if (userId && booking.googleEventId) {
+        await googleCalendarService.deleteEventForBooking(booking._id, userId);
+      }
+    } catch (err) {
+      console.error("google calendar delete failed:", err?.message || err);
+    }
+
     return { success: true, data: booking, refundAmount };
   } catch (error) {
     return { success: false, error: error.message };
@@ -1109,6 +1139,19 @@ export const updatePaymentStatus = async (id, paymentData) => {
     }
 
     await booking.save();
+    // ensure calendar event exists or updated when payment becomes paid/confirmed
+    try {
+      const userId = booking.user?.userId || null;
+      if (userId) {
+        if (booking.googleEventId) {
+          await googleCalendarService.updateEventForBooking(booking._id, userId);
+        } else if (booking.status === "confirmed") {
+          await googleCalendarService.createEventForBooking(booking._id, userId);
+        }
+      }
+    } catch (err) {
+      console.error("google calendar sync after payment failed:", err?.message || err);
+    }
     return { success: true, data: booking };
   } catch (error) {
     return { success: false, error: error.message };

@@ -387,6 +387,12 @@ const bookingSchema = new Schema(
       default: "",
     },
 
+    googleEventId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
     /* =========================
        CANCELLATION
     ========================= */

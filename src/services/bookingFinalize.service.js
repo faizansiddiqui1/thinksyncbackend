@@ -1,4 +1,5 @@
 import Booking from "../models/user_models/Booking.js";
+import * as googleCalendarService from "./googleCalendar.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { redeemOffer } from "./offer.service.js";
 import { sendBookingConfirmationEmail } from "./mail.service.js";
@@ -171,6 +172,16 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     console.log("✅ FINAL BOOKING RESOURCES:", finalBookingDoc.resources);
 
     const booking = await Booking.create(finalBookingDoc);
+
+    // try to create calendar event if user connected google
+    try {
+      const userId = booking.user?.userId || null;
+      if (userId) {
+        await googleCalendarService.createEventForBooking(booking._id, userId);
+      }
+    } catch (err) {
+      console.error("google calendar create failed:", err?.message || err);
+    }
 
     await TempBooking.deleteOne({
       orderId: paymentInfo.reference,

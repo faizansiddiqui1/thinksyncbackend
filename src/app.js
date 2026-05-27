@@ -30,6 +30,7 @@ import onboardingRoutes from "./routes/company.routes.js"
 
 
 import virtualOfficeRoutes from "./routes/virtualOfficePlan.routes.js"
+import googleAuthRoutes from "./routes/googleAuth.routes.js";
 
 import CityRoutes from "./routes/City.routes.js"
 
@@ -124,6 +125,9 @@ app.get("/health", (req, res) =>
 
 
 app.use("/api/payout", BookingRoutes);
+
+// Google OAuth
+app.use("/api/auth", googleAuthRoutes);
 
 
 
