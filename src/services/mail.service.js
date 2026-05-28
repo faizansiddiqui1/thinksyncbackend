@@ -7,6 +7,7 @@ import {
   getEmailVariableCatalog,
   renderEmailTemplate,
 } from "./emailTemplateRegistry.service.js";
+import { ensureBookingAccessCredential } from "./securityAccess/securityAccess.service.js";
 
 const transporterCache = new Map();
 const emailQueue = [];
@@ -240,6 +241,23 @@ async function buildBookingMailContext(booking) {
   const timeZone =
     booking?.timezone || space?.address?.timezone || "Asia/Kolkata";
   const baseUrl = getAppBaseUrl();
+  const access = await ensureBookingAccessCredential(booking).catch(() => null);
+  const accessLocation =
+    access?.entryPermissions?.join(", ") ||
+    access?.locations
+      ?.map((location) => {
+        return [
+          location.entryGate,
+          location.floorLabel,
+          location.workspaceLabel,
+          location.meetingRoomLabel,
+        ]
+          .filter(Boolean)
+          .join(" • ");
+      })
+      .filter(Boolean)
+      .join(", ") ||
+    (space?.name || "Assigned workspace");
 
   return {
     tenant: space?.owner || null,
@@ -269,6 +287,14 @@ async function buildBookingMailContext(booking) {
     paymentAmount: formatCurrencyInr(
       booking?.priceBreakdown?.totalAmount,
     ),
+    accessCode: access?.accessCode || "",
+    accessValidity: access?.validity?.label || "",
+    accessLocation,
+    accessQrImage: access?.qrImage || "",
+    accessInstructions:
+      access?.status === "active"
+        ? "Show this QR or access code at the assigned entry during your active booking window. The same pass stays linked to your booking until it expires."
+        : "Your booking access status will update automatically in your dashboard if the booking changes.",
     reviewLink: `${baseUrl}/bookings/${booking?._id}/review`,
     manageBookingLink: `${baseUrl}/bookings/${booking?._id}`,
     platformName: getPlatformName(),

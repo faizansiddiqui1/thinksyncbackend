@@ -151,6 +151,9 @@ export async function getAdminKycStatusHandler(req, res) {
         whiteLabel?.permissions?.customBranding,
       ),
     };
+    const securityAccessEnabled =
+      whiteLabel?.status === "approved" &&
+      whiteLabel?.request?.needsHardwareAccess === true;
 
     // 🔥 COMMON RESPONSE BASE
     const baseResponse = {
@@ -165,6 +168,7 @@ export async function getAdminKycStatusHandler(req, res) {
       workspaceAccess,
       workspaceHome,
       whiteLabel,
+      securityAccessEnabled,
       branding,
 
       customRoles: user.customRoles || [],

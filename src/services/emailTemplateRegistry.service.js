@@ -171,6 +171,31 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     description: "Formatted booking amount.",
     sample: "INR 2,499",
   },
+  accessCode: {
+    label: "Access code",
+    description: "Booking-linked access code shown with the QR pass.",
+    sample: "ACC-3F81A2",
+  },
+  accessValidity: {
+    label: "Access validity",
+    description: "Readable access timing window.",
+    sample: "26 May 2026, 09:45 AM to 26 May 2026, 06:15 PM",
+  },
+  accessLocation: {
+    label: "Access location",
+    description: "Assigned entry gate or access-enabled location.",
+    sample: "Gate A • Floor 3 • Meeting Room",
+  },
+  accessQrImage: {
+    label: "Access QR image",
+    description: "QR image data URI for booking access.",
+    sample: "data:image/png;base64,...",
+  },
+  accessInstructions: {
+    label: "Access instructions",
+    description: "Short access instructions for the booking pass.",
+    sample: "Show this QR at the assigned gate during your booking window.",
+  },
   platformName: {
     label: "Platform name",
     description: "Marketplace brand name.",
@@ -398,6 +423,20 @@ export const SYSTEM_EMAIL_TEMPLATE_DEFINITIONS = [
             </td>
           </tr>
         </table>
+        <div style="margin:20px 0;border-radius:18px;background:#eff6ff;padding:18px;">
+          <p style="margin:0 0 10px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#1d4ed8;">Access Space</p>
+          <p style="margin:0 0 10px;font-size:15px;line-height:1.7;color:#0f172a;">
+            <strong>Access code:</strong> {{accessCode}}<br />
+            <strong>Validity:</strong> {{accessValidity}}<br />
+            <strong>Entry details:</strong> {{accessLocation}}
+          </p>
+          <div style="margin:14px 0;text-align:center;">
+            <img src="{{accessQrImage}}" alt="Booking access QR" width="180" height="180" style="max-width:180px;width:100%;height:auto;border-radius:18px;background:#ffffff;padding:12px;" />
+          </div>
+          <p style="margin:0;font-size:14px;line-height:1.7;color:#334155;">
+            {{accessInstructions}}
+          </p>
+        </div>
         <div style="margin:24px 0;">
           <a href="{{manageBookingLink}}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:999px;background:#1d4ed8;padding:14px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">
             View booking
@@ -414,6 +453,11 @@ export const SYSTEM_EMAIL_TEMPLATE_DEFINITIONS = [
       "bookingStart",
       "bookingEnd",
       "paymentAmount",
+      "accessCode",
+      "accessValidity",
+      "accessLocation",
+      "accessQrImage",
+      "accessInstructions",
       "manageBookingLink",
       "platformName",
       "supportEmail",

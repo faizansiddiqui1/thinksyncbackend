@@ -3,6 +3,7 @@ import * as googleCalendarService from "./googleCalendar.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { redeemOffer } from "./offer.service.js";
 import { sendBookingConfirmationEmail } from "./mail.service.js";
+import { ensureBookingAccessCredential } from "./securityAccess/securityAccess.service.js";
 
 function getUserIdFromBookingData(bookingData) {
   return (
@@ -181,6 +182,15 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
       }
     } catch (err) {
       console.error("google calendar create failed:", err?.message || err);
+    }
+
+    try {
+      await ensureBookingAccessCredential(booking);
+    } catch (err) {
+      console.error(
+        "booking access credential generation failed:",
+        err?.message || err,
+      );
     }
 
     await TempBooking.deleteOne({

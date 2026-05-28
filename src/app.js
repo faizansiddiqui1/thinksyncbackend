@@ -43,6 +43,7 @@ import feedbackRoutes from "./routes/feedback.routes.js";
 import adminFeedbackRoutes from "./routes/adminFeedback.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
 import adminMailTemplateRoutes from "./routes/adminMailTemplate.routes.js";
+import securityAccessRoutes from "./routes/securityAccess.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 
@@ -177,6 +178,7 @@ app.use("/api/documents", DocumentsRoutes)
 
 // white label routes
 app.use("/api/whitelabel", whiteLabelRoutes);
+app.use("/api/security-access", securityAccessRoutes);
 
 /* -------------------------
    404 and error handler

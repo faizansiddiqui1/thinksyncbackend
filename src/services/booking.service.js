@@ -15,6 +15,10 @@ import * as googleCalendarService from "./googleCalendar.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
 import User from "../models/user_models/User.js";
+import {
+  attachAccessToBookings,
+  ensureBookingAccessCredential,
+} from "./securityAccess/securityAccess.service.js";
 
 function withReviewState(booking) {
   const paymentStatus =
@@ -426,6 +430,12 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       console.error("google calendar create failed for internal booking:", err?.message || err);
     }
 
+    try {
+      await ensureBookingAccessCredential(booking);
+    } catch (err) {
+      console.error("internal booking access credential failed:", err?.message || err);
+    }
+
     return {
       success: true,
       data: {
@@ -725,10 +735,12 @@ export const getOwnerBookings = async (user, filters = {}) => {
     const start = (pageNum - 1) * limitNum;
     const paginated = filteredByKyc.slice(start, start + limitNum);
 
+    const bookingsWithAccess = await attachAccessToBookings(paginated);
+
     return {
       success: true,
       data: {
-        bookings: paginated,
+        bookings: bookingsWithAccess,
         stats,
         filters: {
           status: status || "all",
@@ -818,10 +830,12 @@ export const getMyBookings = async (userId, filters = {}) => {
 
     const total = await Booking.countDocuments(query);
 
+    const bookingsWithAccess = await attachAccessToBookings(bookingsWithImage);
+
     return {
       success: true,
       data: {
-        bookings: bookingsWithImage,
+        bookings: bookingsWithAccess,
         pagination: {
           page,
           limit,
@@ -858,7 +872,11 @@ export const getMyBookingById = async (userId, bookingId) => {
       return { success: false, error: "Booking not found" };
     }
 
-    return { success: true, data: withReviewState(booking.toObject()) };
+    const [bookingWithAccess] = await attachAccessToBookings([
+      withReviewState(booking.toObject()),
+    ]);
+
+    return { success: true, data: bookingWithAccess };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -906,6 +924,12 @@ export const cancelMyBooking = async (userId, bookingId, reason = "") => {
     }
 
     await booking.save();
+
+    try {
+      await ensureBookingAccessCredential(booking);
+    } catch (err) {
+      console.error("cancel booking access sync failed:", err?.message || err);
+    }
 
     return { success: true, data: booking, refundAmount };
   } catch (error) {
