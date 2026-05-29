@@ -33,6 +33,7 @@ const emailTemplateSchema = new Schema(
         "review",
         "security",
         "marketing",
+        "consultant",
         "system",
       ],
       default: "system",

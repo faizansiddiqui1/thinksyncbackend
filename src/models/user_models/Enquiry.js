@@ -81,6 +81,85 @@ const enquirySchema = new Schema(
       index: true,
     },
 
+    consultantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Consultant",
+      default: null,
+      index: true,
+    },
+
+    listingId: {
+      type: Schema.Types.ObjectId,
+      ref: "Space",
+      default: null,
+      index: true,
+    },
+
+    listingName: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true,
+    },
+
+    listingSlug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      index: true,
+    },
+
+    city: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true,
+    },
+
+    product: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      index: true,
+    },
+
+    spaceType: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      index: true,
+    },
+
+    pageType: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true,
+    },
+
+    sourceUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    utm: {
+      source: { type: String, trim: true, default: "" },
+      medium: { type: String, trim: true, default: "" },
+      campaign: { type: String, trim: true, default: "" },
+      term: { type: String, trim: true, default: "" },
+      content: { type: String, trim: true, default: "" },
+    },
+
+    device: {
+      userAgent: { type: String, trim: true, default: "" },
+      ip: { type: String, trim: true, default: "" },
+      referrer: { type: String, trim: true, default: "" },
+    },
+
     // Optional relation to a specific resource/listing card
     resourceId: {
       type: Schema.Types.ObjectId,
@@ -114,6 +193,7 @@ const enquirySchema = new Schema(
         "super_admin",
         "company_admin",
         "employee",
+        "consultant",
       ],
       default: "public",
     },
@@ -141,7 +221,17 @@ const enquirySchema = new Schema(
 
     status: {
       type: String,
-      enum: ["new", "contacted", "converted", "rejected"],
+      enum: [
+        "new",
+        "contacted",
+        "interested",
+        "follow-up",
+        "qualified",
+        "closed",
+        "lost",
+        "converted",
+        "rejected",
+      ],
       default: "new",
       index: true,
     },
@@ -175,6 +265,48 @@ const enquirySchema = new Schema(
       type: Date,
       default: null,
     },
+
+    assignmentHistory: [
+      {
+        consultant: { type: Schema.Types.ObjectId, ref: "Consultant", default: null },
+        previousConsultant: { type: Schema.Types.ObjectId, ref: "Consultant", default: null },
+        assignedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        reason: { type: String, trim: true, default: "" },
+        assignedAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    leadNotes: [
+      {
+        note: { type: String, trim: true, required: true },
+        addedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    callLogs: [
+      {
+        outcome: { type: String, trim: true, default: "" },
+        notes: { type: String, trim: true, default: "" },
+        calledBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        calledAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    emailLogs: [
+      {
+        templateId: { type: Schema.Types.ObjectId, ref: "LeadEmailTemplate", default: null },
+        subject: { type: String, trim: true, default: "" },
+        status: {
+          type: String,
+          enum: ["queued", "sent", "failed", "logged"],
+          default: "logged",
+        },
+        error: { type: String, trim: true, default: "" },
+        sentBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        sentAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -186,6 +318,9 @@ enquirySchema.index({ createdAt: -1 });
 enquirySchema.index({ status: 1, createdAt: -1 });
 enquirySchema.index({ spaceId: 1, status: 1, createdAt: -1 });
 enquirySchema.index({ resourceId: 1, status: 1, createdAt: -1 });
+enquirySchema.index({ consultantId: 1, status: 1, createdAt: -1 });
+enquirySchema.index({ city: 1, product: 1, status: 1, createdAt: -1 });
+enquirySchema.index({ listingId: 1, createdAt: -1 });
 enquirySchema.index({ email: 1, createdAt: -1 });
 enquirySchema.index({ phoneNumber: 1, createdAt: -1 });
 
@@ -197,6 +332,13 @@ enquirySchema.pre("save", function (next) {
   if (this.details) this.details = this.details.trim();
   if (this.notes) this.notes = this.notes.trim();
   if (this.budget) this.budget = this.budget.trim();
+  if (this.listingName) this.listingName = this.listingName.trim();
+  if (this.listingSlug) this.listingSlug = this.listingSlug.trim().toLowerCase();
+  if (this.city) this.city = this.city.trim();
+  if (this.product) this.product = this.product.trim().toLowerCase();
+  if (this.spaceType) this.spaceType = this.spaceType.trim().toLowerCase();
+  if (this.pageType) this.pageType = this.pageType.trim();
+  if (this.sourceUrl) this.sourceUrl = this.sourceUrl.trim();
   next();
 });
 

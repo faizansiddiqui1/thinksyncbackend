@@ -82,6 +82,8 @@ export async function getAdminKycStatusHandler(req, res) {
 
     if (user.role === "super_admin") {
       accountType = "super_admin";
+    } else if (user.role === "consultant") {
+      accountType = "consultant";
     } else if (company?.owner?.toString() === user._id.toString()) {
       accountType = "company_admin";
       isCompanyAdmin = true;

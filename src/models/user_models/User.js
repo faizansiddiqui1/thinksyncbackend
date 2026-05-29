@@ -135,7 +135,7 @@ const userSchema = new Schema(
     emailVerified: { type: Boolean, default: false },
     role: {
       type: String,
-      enum: ["user", "admin", "super_admin", "pending_admin"],
+      enum: ["user", "admin", "super_admin", "pending_admin", "consultant"],
       default: "user",
     },
     customRoles: [

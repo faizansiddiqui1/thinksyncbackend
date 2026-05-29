@@ -1,5 +1,6 @@
 import User from "../models/user_models/User.js";
 import Role from "../models/super_admin_models/Role.js";
+import Consultant from "../models/super_admin_models/Consultant.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -53,6 +54,141 @@ const resolveIdentifier = (identifier) => {
   }
 
   return { isMail, email, phone };
+};
+
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildPhoneRegex = (phone = "") => {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return null;
+  const local = normalizePhone(digits);
+  if (!local) return null;
+  return new RegExp(`${local.split("").map(escapeRegex).join("\\D*")}$`);
+};
+
+const buildPhoneCandidates = (phone = "") => {
+  const local = normalizePhone(phone);
+  if (!local) return [];
+  return [...new Set([local, `91${local}`, `+91${local}`, phone])].filter(Boolean);
+};
+
+const buildIdentifierQuery = ({ isMail, email, phone }) => {
+  if (isMail) return { email };
+
+  const phoneRegex = buildPhoneRegex(phone);
+  const phoneClauses = buildPhoneCandidates(phone).map((candidate) => ({
+    phoneNumber: candidate,
+  }));
+
+  if (phoneRegex) phoneClauses.push({ phoneNumber: { $regex: phoneRegex } });
+
+  return { $or: phoneClauses };
+};
+
+const findUserByIdentifier = ({ isMail, email, phone }) => {
+  return User.findOne(buildIdentifierQuery({ isMail, email, phone }));
+};
+
+const buildConsultantIdentifierQuery = ({ isMail, email, phone }) => {
+  const clauses = [];
+  if (isMail && email) clauses.push({ email });
+
+  if (!isMail && phone) {
+    const phoneRegex = buildPhoneRegex(phone);
+    buildPhoneCandidates(phone).forEach((candidate) => {
+      clauses.push({ phone: candidate });
+    });
+    if (phoneRegex) clauses.push({ phone: { $regex: phoneRegex } });
+  }
+
+  if (!clauses.length) return null;
+
+  return {
+    isActive: { $ne: false },
+    $or: clauses,
+  };
+};
+
+const buildConsultantUsername = (consultant, identifier) => {
+  const source =
+    String(consultant?.email || identifier.email || "").split("@")[0] ||
+    consultant?.name ||
+    "consultant";
+
+  const normalized = String(source)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 12);
+
+  return `${normalized || "consultant"}_${Date.now().toString(36)}`.slice(0, 20);
+};
+
+const syncConsultantLoginUser = async (identifier, user = null) => {
+  const query = buildConsultantIdentifierQuery(identifier);
+  if (!query) return user;
+
+  const consultant = await Consultant.findOne(query);
+  if (!consultant) return user;
+
+  let loginUser = user;
+
+  if (!loginUser) {
+    if (consultant.email) {
+      loginUser = await findUserByIdentifier({
+        isMail: true,
+        email: consultant.email,
+        phone: null,
+      });
+    }
+
+    if (!loginUser && consultant.phone) {
+      loginUser = await findUserByIdentifier({
+        isMail: false,
+        email: null,
+        phone: normalizePhone(consultant.phone),
+      });
+    }
+  }
+
+  if (!loginUser) {
+    loginUser = await User.create({
+      email: consultant.email || identifier.email || undefined,
+      phoneNumber: normalizePhone(consultant.phone || identifier.phone) || undefined,
+      username: buildConsultantUsername(consultant, identifier),
+      role: "consultant",
+      isActive: true,
+    });
+  }
+
+  let userChanged = false;
+  if (loginUser.role === "user") {
+    loginUser.role = "consultant";
+    loginUser.isActive = true;
+    userChanged = true;
+  }
+
+  if (!loginUser.email && consultant.email) {
+    loginUser.email = consultant.email;
+    userChanged = true;
+  }
+
+  if (!loginUser.phoneNumber && consultant.phone) {
+    loginUser.phoneNumber = normalizePhone(consultant.phone);
+    userChanged = true;
+  }
+
+  if (userChanged) {
+    await loginUser.save();
+  }
+
+  if (!consultant.linkedUser || String(consultant.linkedUser) !== String(loginUser._id)) {
+    consultant.linkedUser = loginUser._id;
+    await consultant.save();
+  }
+
+  return loginUser;
 };
 
 const hasAssignedRbacPermissions = async (user) => {
@@ -156,7 +292,7 @@ export const sendOtp = async ({
     .trim()
     .toLowerCase();
 
-  const user = await User.findOne(isMail ? { email } : { phoneNumber: phone });
+  let user = await findUserByIdentifier({ isMail, email, phone });
 
   if (normalizedIntent === "login") {
     if (!user) {
@@ -215,11 +351,13 @@ export const sendOtp = async ({
   }
 
   if (normalizedIntent === "admin-login") {
+    user = await syncConsultantLoginUser({ isMail, email, phone }, user);
+
     if (!user) {
       throw new Error("Admin account not found");
     }
 
-    const allowedRoles = ["pending_admin", "admin", "super_admin"];
+    const allowedRoles = ["pending_admin", "admin", "super_admin", "consultant"];
     const hasAdminRoleAccess = allowedRoles.includes(user.role);
     const hasRbacAdminAccess = await hasAssignedRbacPermissions(user);
 
@@ -259,9 +397,7 @@ export const verifyOTPAndCreateTokens = async (
 
   const { isMail, email, phone } = resolveIdentifier(identifier);
 
-  const user = await User.findOne(
-    isMail ? { email } : { phoneNumber: phone },
-  ).populate("companyId");
+  const user = await findUserByIdentifier({ isMail, email, phone }).populate("companyId");
 
   if (!user) throw new Error("User not found");
   if (user.isActive === false) throw new Error("Account disabled");
@@ -306,7 +442,9 @@ export const verifyOTPAndCreateTokens = async (
     normalizedIntent,
   );
 
-  const isAdminRoleUser = user.role === "admin" || user.role === "super_admin";
+  const isAdminRoleUser =
+    user.role === "admin" || user.role === "super_admin" || user.role === "consultant";
+  const shouldEnsureAdminProfile = user.role === "admin" || user.role === "super_admin";
   const isPendingAdminUser = user.role === "pending_admin";
   const isCustomRbacUser = await hasAssignedRbacPermissions(user);
 
@@ -324,7 +462,7 @@ export const verifyOTPAndCreateTokens = async (
       throw new Error("Invalid intent");
     }
 
-    if (isAdminRoleUser || normalizedIntent === "admin-signup") {
+    if (shouldEnsureAdminProfile || normalizedIntent === "admin-signup") {
       await ensureAdminProfile(user._id);
     }
 

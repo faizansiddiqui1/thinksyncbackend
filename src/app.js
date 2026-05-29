@@ -47,6 +47,7 @@ import securityAccessRoutes from "./routes/securityAccess.routes.js";
 import savedSpaceRoutes from "./routes/savedSpace.routes.js";
 import compareRoutes from "./routes/compare.routes.js";
 import visitRequestRoutes from "./routes/visitRequest.routes.js";
+import consultantRoutes from "./routes/consultant.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 
@@ -68,6 +69,7 @@ app.use(
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:4028",
+  "http://localhost:4029",
   "http://192.168.31.110:4028/landing-page",
   process.env.FRONTEND_URL,
 ];
@@ -178,6 +180,7 @@ app.use("/api/super-admin/mail-templates", adminMailTemplateRoutes);
 app.use("/api/saved-spaces", savedSpaceRoutes);
 app.use("/api/compare", compareRoutes);
 app.use("/api/visit-requests", visitRequestRoutes);
+app.use("/api", consultantRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)
@@ -201,7 +204,7 @@ if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", false);
 }
 
-const PORT = process.env.PORT || 5000;
+const PORT = parseInt(process.env.PORT, 10) || 5000;
 
 ensureDefaultEmailTemplates()
   .then(() => {
@@ -212,8 +215,18 @@ ensureDefaultEmailTemplates()
     startBookingCompletionCron();
   });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV || "development"}`);
 });
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use. Please stop the running process or set a different PORT.`);
+    process.exit(1);
+  }
+  console.error("Server error:", error);
+  process.exit(1);
+});
+
 export default app;

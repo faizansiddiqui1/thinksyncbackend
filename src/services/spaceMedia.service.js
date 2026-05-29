@@ -93,6 +93,7 @@ export const getPresignForImage = async (
     seating_option: (id) => `seating-options/${id}/images`,
     kyc: (id) => `kyc/${id}`,
     user: (id) => `users/${id}/avatar`,
+    consultant: (id) => `consultants/${id || "new"}/profile`,
 
     city_document: (id) => `documents/cities/${id}`,
     space_document: (id) => `documents/spaces/${id}`,
