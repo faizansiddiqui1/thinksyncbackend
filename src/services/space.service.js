@@ -957,6 +957,120 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
   };
 };
 
+export const fetchSpaceCardsByIds = async (
+  rawIds = [],
+  { includeUnpublished = false } = {},
+) => {
+  const orderedIds = [
+    ...new Set(
+      (Array.isArray(rawIds) ? rawIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => mongoose.Types.ObjectId.isValid(id)),
+    ),
+  ];
+
+  if (!orderedIds.length) return [];
+
+  const q = {
+    _id: { $in: orderedIds },
+  };
+
+  if (!includeUnpublished) {
+    q.isPublished = true;
+  }
+
+  const items = await Space.find(q)
+    .select(
+      [
+        "name",
+        "slug",
+        "shortDescription",
+        "tagline",
+        "spaceType",
+        "address",
+        "averageRating",
+        "reviewCount",
+        "isFeatured",
+        "amenities",
+        "listingModes",
+        "privateOfficeDetails",
+        "centerDetails",
+        "priceBreakup",
+        "bookingRules",
+        "access24x7",
+        "operatingHours",
+        "categories",
+        "tags",
+        "startingPrice",
+        "createdAt",
+        "updatedAt",
+      ].join(" "),
+    )
+    .lean()
+    .exec();
+
+  if (!items.length) return [];
+
+  const ids = items.map((s) => s._id);
+  const cityMap = await buildCityMap(items);
+
+  const [medias, virtualOfficePlans, seatingOptions, resources] =
+    await Promise.all([
+      SpaceMedia.find({ space: { $in: ids } })
+        .select("space images video")
+        .lean()
+        .exec(),
+
+      VirtualOfficePlan.find({
+        space: { $in: ids },
+        isActive: true,
+      })
+        .lean()
+        .exec(),
+
+      SeatingOption.find({
+        space: { $in: ids },
+        isActive: true,
+      })
+        .lean()
+        .exec(),
+
+      ResourceSchema.find({
+        space: { $in: ids },
+        isActive: true,
+      })
+        .lean()
+        .exec(),
+    ]);
+
+  const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
+  const virtualOfficeMap = groupBySpace(virtualOfficePlans);
+  const seatingOptionsMap = groupBySpace(seatingOptions);
+  const resourceMap = groupBySpace(resources);
+
+  const cardMap = new Map(
+    items.map((space) => {
+      const id = String(space._id);
+      const cityDoc = cityMap.get(String(space.address?.city)) || null;
+
+      const card = buildCardPayload({
+        space: {
+          ...space,
+          _cityDoc: cityDoc,
+        },
+        media: mediaMap.get(id) || { images: [], video: null },
+        virtualOfficePlans: virtualOfficeMap.get(id) || [],
+        seatingOptions: seatingOptionsMap.get(id) || [],
+        resources: resourceMap.get(id) || [],
+      });
+
+      return [id, { ...card, createdAt: space.createdAt, updatedAt: space.updatedAt }];
+    }),
+  );
+
+  return orderedIds.map((id) => cardMap.get(id)).filter(Boolean);
+};
+
 // ===================================================
 // FETCH SPACE DETAILS BY SLUG
 // ===================================================

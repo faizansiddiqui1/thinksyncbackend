@@ -44,6 +44,9 @@ import adminFeedbackRoutes from "./routes/adminFeedback.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
 import adminMailTemplateRoutes from "./routes/adminMailTemplate.routes.js";
 import securityAccessRoutes from "./routes/securityAccess.routes.js";
+import savedSpaceRoutes from "./routes/savedSpace.routes.js";
+import compareRoutes from "./routes/compare.routes.js";
+import visitRequestRoutes from "./routes/visitRequest.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 
@@ -172,6 +175,9 @@ app.use("/api/feedback", feedbackRoutes);
 app.use("/api/admin/analytics", adminFeedbackRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/super-admin/mail-templates", adminMailTemplateRoutes);
+app.use("/api/saved-spaces", savedSpaceRoutes);
+app.use("/api/compare", compareRoutes);
+app.use("/api/visit-requests", visitRequestRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)
