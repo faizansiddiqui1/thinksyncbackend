@@ -448,6 +448,13 @@ spaceSchema.virtual("virtualOfficePlans", {
   foreignField: "space",
 });
 
+spaceSchema.virtual("eventSpace", {
+  ref: "EventSpace",
+  localField: "_id",
+  foreignField: "space",
+  justOne: true,
+});
+
 spaceSchema.virtual("pricingPlans", {
   ref: "PricingPlan",
   localField: "_id",

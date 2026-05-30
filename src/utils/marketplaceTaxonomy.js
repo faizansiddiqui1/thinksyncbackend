@@ -1,6 +1,7 @@
 const VIRTUAL_TYPES = new Set(["virtual_office", "vertual_office"]);
 const MANAGED_TYPES = new Set(["managed_office"]);
 const PRIVATE_TYPES = new Set(["private_office"]);
+const EVENT_TYPES = new Set(["event_space"]);
 
 function normalizeText(value = "") {
   return String(value || "")
@@ -42,6 +43,14 @@ export function getInventoryCategory(space = {}) {
   }
 
   if (
+    cardVariant.includes("event") ||
+    EVENT_TYPES.has(spaceType) ||
+    categories.includes("event_space")
+  ) {
+    return "event_space";
+  }
+
+  if (
     cardVariant.includes("short") ||
     categories.includes("short_term_leasing") ||
     categories.includes("short_term") ||
@@ -69,6 +78,7 @@ export function getInventoryCategoryLabel(category = "") {
     private_office: "Private office",
     managed_office: "Managed office",
     virtual_office: "Virtual office",
+    event_space: "Event space",
     workspace: "Workspace",
   };
 
@@ -93,4 +103,3 @@ export function areComparableCategories(categories = []) {
 
   return unique.length <= 1;
 }
-

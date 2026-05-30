@@ -7,6 +7,7 @@ import PricingPlan from "../models/admin_models/PricingPlan.js";
 import Offer from "../models/admin_models/Offer.js";
 import City from "../models/super_admin_models/City.model.js";
 import VirtualOfficePlan from "../models/admin_models/VirtualOfficePlan.js";
+import EventSpace from "../models/admin_models/EventSpace.js";
 import SeatingOption from "../models/admin_models/SeatingOption.js";
 
 import { normalizePagination, metaFor } from "../utils/pagination.js";
@@ -312,10 +313,49 @@ const buildPrivateOfficeSummary = (space) => {
   };
 };
 
+const buildEventSpaceSummary = (eventSpace = null) => {
+  if (!eventSpace) {
+    return {
+      startingFrom: null,
+      currency: "INR",
+      capacity: null,
+      eventTypes: [],
+      layoutOptions: [],
+      availabilityStatus: "on_request",
+    };
+  }
+
+  const pricing = eventSpace.pricing || {};
+  const candidates = [
+    { unit: "hourly", amount: pricing.hourly },
+    { unit: "half_day", amount: pricing.halfDay },
+    { unit: "full_day", amount: pricing.fullDay },
+    { unit: "daily", amount: pricing.daily },
+  ].filter((item) => Number.isFinite(Number(item.amount)));
+
+  const best = pickLowestBy(candidates, (item) => Number(item.amount));
+
+  return {
+    startingFrom: best?.amount ?? null,
+    currency: pricing.currency || "INR",
+    unit: best?.unit || null,
+    capacity: eventSpace.capacity || null,
+    areaSqFt: eventSpace.areaSqFt ?? null,
+    eventTypes: Array.isArray(eventSpace.eventTypes)
+      ? eventSpace.eventTypes
+      : [],
+    layoutOptions: Array.isArray(eventSpace.layoutOptions)
+      ? eventSpace.layoutOptions
+      : [],
+    availabilityStatus: eventSpace.availabilityStatus || "on_request",
+  };
+};
+
 const buildCardPayload = ({
   space,
   media,
   virtualOfficePlans,
+  eventSpace,
   seatingOptions,
   resources,
 }) => {
@@ -344,6 +384,10 @@ const buildCardPayload = ({
     cardVariant = "virtual_office";
 
     pricingSummary = buildVirtualOfficeSummary(virtualOfficePlans);
+  } else if (normalizedType === "event_space") {
+    cardVariant = "event_space";
+
+    pricingSummary = buildEventSpaceSummary(eventSpace);
   } else if (normalizedType === "cowork_space") {
     if (isShortTerm) {
       cardVariant = "coworking_short_term";
@@ -552,6 +596,8 @@ const buildCardPayload = ({
 
     privateOfficeDetails: space.privateOfficeDetails || null,
 
+    eventSpace: eventSpace || null,
+
     priceBreakup: space.priceBreakup || null,
 
     // =====================================================
@@ -569,6 +615,8 @@ const buildCardPayload = ({
     ctaLabel:
       cardVariant === "virtual_office"
         ? "Get Quote"
+        : cardVariant === "event_space"
+          ? "Enquire Now"
         : cardVariant === "coworking_long_term"
           ? "Get Best Price"
           : cardVariant === "coworking_short_term"
@@ -759,6 +807,8 @@ const SPACE_TYPE_QUERY_MAP = {
 
   virtual_office: ["virtual_office", "vertual_office"],
   vertual_office: ["virtual_office", "vertual_office"],
+
+  event_space: ["event_space"],
 };
 
 export const fetchSpacesListing = async (rawQuery = {}) => {
@@ -896,7 +946,7 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
   const ids = items.map((s) => s._id);
   const cityMap = await buildCityMap(items);
 
-  const [medias, virtualOfficePlans, seatingOptions, resources] =
+  const [medias, virtualOfficePlans, eventSpaces, seatingOptions, resources] =
     await Promise.all([
       SpaceMedia.find({ space: { $in: ids } })
         .select("space images video")
@@ -904,6 +954,13 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
         .exec(),
 
       VirtualOfficePlan.find({
+        space: { $in: ids },
+        isActive: true,
+      })
+        .lean()
+        .exec(),
+
+      EventSpace.find({
         space: { $in: ids },
         isActive: true,
       })
@@ -927,6 +984,9 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
 
   const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
   const virtualOfficeMap = groupBySpace(virtualOfficePlans);
+  const eventSpaceMap = new Map(
+    eventSpaces.map((item) => [String(item.space), item]),
+  );
   const seatingOptionsMap = groupBySpace(seatingOptions);
   const resourceMap = groupBySpace(resources);
 
@@ -936,6 +996,7 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
     const cityDoc = cityMap.get(String(space.address?.city)) || null;
     const media = mediaMap.get(id) || { images: [], video: null };
     const virtualPlans = virtualOfficeMap.get(id) || [];
+    const eventSpace = eventSpaceMap.get(id) || null;
     const seats = seatingOptionsMap.get(id) || [];
     const bookableResources = resourceMap.get(id) || [];
 
@@ -946,6 +1007,7 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
       },
       media,
       virtualOfficePlans: virtualPlans,
+      eventSpace,
       seatingOptions: seats,
       resources: bookableResources,
     });
@@ -1014,7 +1076,7 @@ export const fetchSpaceCardsByIds = async (
   const ids = items.map((s) => s._id);
   const cityMap = await buildCityMap(items);
 
-  const [medias, virtualOfficePlans, seatingOptions, resources] =
+  const [medias, virtualOfficePlans, eventSpaces, seatingOptions, resources] =
     await Promise.all([
       SpaceMedia.find({ space: { $in: ids } })
         .select("space images video")
@@ -1022,6 +1084,13 @@ export const fetchSpaceCardsByIds = async (
         .exec(),
 
       VirtualOfficePlan.find({
+        space: { $in: ids },
+        isActive: true,
+      })
+        .lean()
+        .exec(),
+
+      EventSpace.find({
         space: { $in: ids },
         isActive: true,
       })
@@ -1045,6 +1114,9 @@ export const fetchSpaceCardsByIds = async (
 
   const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
   const virtualOfficeMap = groupBySpace(virtualOfficePlans);
+  const eventSpaceMap = new Map(
+    eventSpaces.map((item) => [String(item.space), item]),
+  );
   const seatingOptionsMap = groupBySpace(seatingOptions);
   const resourceMap = groupBySpace(resources);
 
@@ -1060,6 +1132,7 @@ export const fetchSpaceCardsByIds = async (
         },
         media: mediaMap.get(id) || { images: [], video: null },
         virtualOfficePlans: virtualOfficeMap.get(id) || [],
+        eventSpace: eventSpaceMap.get(id) || null,
         seatingOptions: seatingOptionsMap.get(id) || [],
         resources: resourceMap.get(id) || [],
       });
@@ -1109,6 +1182,7 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       offers,
       media,
       virtualOfficePlans,
+      eventSpace,
       seatingOptions,
       addons,
     ] = await Promise.all([
@@ -1146,6 +1220,13 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
           order: 1,
           durationMonths: 1,
         })
+        .lean()
+        .exec(),
+
+      EventSpace.findOne({
+        space: spaceId,
+        isActive: true,
+      })
         .lean()
         .exec(),
 
@@ -1203,6 +1284,7 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       offers: offers || [],
       media: normalizedMedia,
       virtualOfficePlans: groupedVirtualOfficePlans || {},
+      eventSpace: eventSpace || null,
       seatingOptions: seatingOptions || [],
       addons:
         isCompanyManagedWorkspace && !hasInternalWorkspaceAccess

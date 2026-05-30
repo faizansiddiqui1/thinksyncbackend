@@ -16,6 +16,7 @@ import PricingPlan from "../../models/admin_models/PricingPlan.js";
 import Offer from "../../models/admin_models/Offer.js";
 import SpaceMedia from "../../models/admin_models/SpaceMedia.js";
 import VirtualOfficePlan from "../../models/admin_models/VirtualOfficePlan.js";
+import EventSpace from "../../models/admin_models/EventSpace.js";
 import Addon from "../../models/admin_models/AddonSchema.js";
 import * as mediaService from "../../services/spaceMedia.service.js";
 import {
@@ -83,6 +84,7 @@ export const getFullSpaceById = async (req, res) => {
       offers,
       media,
       virtualOfficePlans,
+      eventSpace,
       addons,
     ] =
       await Promise.all([
@@ -95,6 +97,11 @@ export const getFullSpaceById = async (req, res) => {
         mediaService.getMediaBySpace(id),
 
         VirtualOfficePlan.find({
+          space: id,
+          isActive: true,
+        }).lean(),
+
+        EventSpace.findOne({
           space: id,
           isActive: true,
         }).lean(),
@@ -118,6 +125,8 @@ export const getFullSpaceById = async (req, res) => {
         offers,
 
         virtualOfficePlans,
+
+        eventSpace,
 
         addons,
 
@@ -172,6 +181,7 @@ export const getFullSpacesForOwner = async (req, res) => {
       offers,
       medias,
       virtualOfficePlans,
+      eventSpaces,
       addons,
     ] =
       await Promise.all([
@@ -184,6 +194,11 @@ export const getFullSpacesForOwner = async (req, res) => {
         SpaceMedia.find({ space: { $in: ids } }).lean(),
 
         VirtualOfficePlan.find({
+          space: { $in: ids },
+          isActive: true,
+        }).lean(),
+
+        EventSpace.find({
           space: { $in: ids },
           isActive: true,
         }).lean(),
@@ -220,6 +235,10 @@ export const getFullSpacesForOwner = async (req, res) => {
 
     const virtualOfficeMap = group(virtualOfficePlans, "space");
 
+    const eventSpaceMap = new Map(
+      eventSpaces.map((item) => [String(item.space), item]),
+    );
+
     const addonMap = group(addons, "space");
 
     const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
@@ -234,6 +253,8 @@ export const getFullSpacesForOwner = async (req, res) => {
       offers: offerMap.get(String(s._id)) || [],
 
       virtualOfficePlans: virtualOfficeMap.get(String(s._id)) || [],
+
+      eventSpace: eventSpaceMap.get(String(s._id)) || null,
 
       addons: addonMap.get(String(s._id)) || [],
 

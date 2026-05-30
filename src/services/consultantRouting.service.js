@@ -29,6 +29,9 @@ export function normalizeProductType(value) {
   if (["managed", "managed_office"].includes(key)) {
     return "managed_office";
   }
+  if (["event", "event_space", "events"].includes(key)) {
+    return "event_space";
+  }
   if (["meeting", "meeting_room"].includes(key)) {
     return "meeting_room";
   }

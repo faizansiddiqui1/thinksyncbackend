@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import Consultant, {
   dropLegacyConsultantParallelArrayIndexes,
 } from "../../models/super_admin_models/Consultant.js";
+import City from "../../models/super_admin_models/City.model.js";
 import ConsultantEditRequest from "../../models/super_admin_models/ConsultantEditRequest.js";
 import LeadEmailTemplate from "../../models/super_admin_models/LeadEmailTemplate.js";
 import Enquiry from "../../models/user_models/Enquiry.js";
@@ -63,6 +64,56 @@ function isSameId(left, right) {
 function getUserObjectId(userId) {
   if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) return null;
   return new mongoose.Types.ObjectId(String(userId));
+}
+
+function createPublicSlug(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function publicConsultantSlug(consultant = {}) {
+  const nameSlug = createPublicSlug(consultant.name || "consultant");
+  const shortId = String(consultant._id || "").slice(-6);
+  return shortId ? `${nameSlug}-${shortId}` : nameSlug;
+}
+
+async function resolvePublicCity(city = "") {
+  const raw = String(city || "").trim();
+  if (!raw || raw === "all") return null;
+
+  if (mongoose.Types.ObjectId.isValid(raw)) {
+    return City.findById(raw).select("_id name slug").lean();
+  }
+
+  return City.findOne({
+    $or: [
+      { slug: raw.toLowerCase() },
+      {
+        name: {
+          $regex: `^${raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+          $options: "i",
+        },
+      },
+    ],
+  })
+    .select("_id name slug")
+    .lean();
+}
+
+function serializePublicConsultantWithSlug(consultant = {}) {
+  const serialized = serializeConsultant(consultant, { publicView: true });
+  if (!serialized) return null;
+
+  return {
+    ...serialized,
+    slug: publicConsultantSlug(consultant),
+    assignedCities: consultant.assignedCities || [],
+    assignedProductTypes: consultant.assignedProductTypes || [],
+    assignedSpaceTypes: consultant.assignedSpaceTypes || [],
+  };
 }
 
 function getAccessibleTemplateFilter(req, { activeOnly = false } = {}) {
@@ -327,6 +378,78 @@ export const getAssignedConsultant = async (req, res) => {
         context,
         match,
       },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const listPublicConsultants = async (req, res) => {
+  try {
+    const city = await resolvePublicCity(req.query.city);
+    const filter = {
+      isActive: true,
+      "visibilityRules.hiddenFromPublic": { $ne: true },
+    };
+
+    if (city?._id) {
+      filter.$or = [
+        { assignedCities: city._id },
+        { assignedCities: { $size: 0 } },
+        { "visibilityRules.globalFallback": true },
+      ];
+    }
+
+    const consultants = await Consultant.find(filter)
+      .populate("assignedCities", "name slug state")
+      .sort({ priority: 1, createdAt: 1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      data: consultants.map(serializePublicConsultantWithSlug).filter(Boolean),
+      context: {
+        city,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getPublicConsultant = async (req, res) => {
+  try {
+    const rawSlug = createPublicSlug(req.params.slug);
+    const shortId = rawSlug.split("-").pop();
+    const filter = {
+      isActive: true,
+      "visibilityRules.hiddenFromPublic": { $ne: true },
+    };
+
+    let consultant = null;
+
+    if (mongoose.Types.ObjectId.isValid(req.params.slug)) {
+      consultant = await Consultant.findOne({ ...filter, _id: req.params.slug })
+        .populate("assignedCities", "name slug state")
+        .lean();
+    }
+
+    if (!consultant && shortId?.length >= 6) {
+      const candidates = await Consultant.find(filter)
+        .populate("assignedCities", "name slug state")
+        .sort({ priority: 1, createdAt: 1 })
+        .lean();
+
+      consultant = candidates.find((item) => publicConsultantSlug(item) === rawSlug) || null;
+    }
+
+    if (!consultant) {
+      return res.status(404).json({ success: false, message: "Consultant not found" });
+    }
+
+    return res.json({
+      success: true,
+      data: serializePublicConsultantWithSlug(consultant),
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

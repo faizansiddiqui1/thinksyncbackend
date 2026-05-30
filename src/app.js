@@ -30,6 +30,7 @@ import onboardingRoutes from "./routes/company.routes.js"
 
 
 import virtualOfficeRoutes from "./routes/virtualOfficePlan.routes.js"
+import eventSpaceRoutes from "./routes/eventSpace.routes.js"
 import googleAuthRoutes from "./routes/googleAuth.routes.js";
 
 import CityRoutes from "./routes/City.routes.js"
@@ -48,6 +49,7 @@ import savedSpaceRoutes from "./routes/savedSpace.routes.js";
 import compareRoutes from "./routes/compare.routes.js";
 import visitRequestRoutes from "./routes/visitRequest.routes.js";
 import consultantRoutes from "./routes/consultant.routes.js";
+import marketplaceContentRoutes from "./routes/marketplaceContent.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 
@@ -165,6 +167,7 @@ app.use("/api/enquiries", enquiryRoutes);
 app.use("/api/onboarding", onboardingRoutes)
 
 app.use("/api/virtual-office-plans", virtualOfficeRoutes);
+app.use("/api/event-spaces", eventSpaceRoutes);
 
 app.use("/api/location", CityRoutes)
 
@@ -181,6 +184,7 @@ app.use("/api/saved-spaces", savedSpaceRoutes);
 app.use("/api/compare", compareRoutes);
 app.use("/api/visit-requests", visitRequestRoutes);
 app.use("/api", consultantRoutes);
+app.use("/api", marketplaceContentRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)

@@ -1,9 +1,6 @@
 import express from "express";
 import {
-  createOffer,
   listOffers,
-  updateOffer,
-  deleteOffer,
   validateOffer,
   listAllOffers,
   redeemOfferController,
@@ -13,15 +10,25 @@ import {
   requireAuth,
   requirePermission,
 } from "../middlewares/auth.js";
+import { requireSuperAdmin } from "../middlewares/superadmin.js";
 
 const router = express.Router();
+
+function spaceOffersDisabled(_req, res) {
+  return res.status(410).json({
+    success: false,
+    message:
+      "Space-specific offers are disabled. Use Super Admin Global Offers at /api/admin/marketplace-content/offers.",
+  });
+}
 
 router.post(
   "/spaces/:spaceId/offers",
   requireAuth,
+  requireSuperAdmin,
   requireAdminAccess,
   requirePermission("offers", "create"),
-  createOffer,
+  spaceOffersDisabled,
 );
 
 router.get(
@@ -43,16 +50,18 @@ router.get(
 router.put(
   "/spaces/:spaceId/offers/:offerId",
   requireAuth,
+  requireSuperAdmin,
   requireAdminAccess,
   requirePermission("offers", "update"),
-  updateOffer,
+  spaceOffersDisabled,
 );
 router.delete(
   "/spaces/:spaceId/offers/:offerId",
   requireAuth,
+  requireSuperAdmin,
   requireAdminAccess,
   requirePermission("offers", "delete"),
-  deleteOffer,
+  spaceOffersDisabled,
 );
 
 

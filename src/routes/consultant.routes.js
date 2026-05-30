@@ -6,8 +6,10 @@ import {
   deleteConsultantProfileImage,
   deleteLeadEmailTemplate,
   getAssignedConsultant,
+  getPublicConsultant,
   getConsultantDashboard,
   getLeadDistribution,
+  listPublicConsultants,
   listConsultantEditRequests,
   listConsultantLeads,
   listConsultants,
@@ -26,6 +28,8 @@ const router = express.Router();
 
 // Public routing lookup used by listing cards and details pages.
 router.get("/lead-routing/consultant", getAssignedConsultant);
+router.get("/public/consultants", listPublicConsultants);
+router.get("/public/consultants/:slug", getPublicConsultant);
 
 // Super admin consultant and routing management.
 router.get("/admin/consultants", requireAuth, requireSuperAdmin, listConsultants);

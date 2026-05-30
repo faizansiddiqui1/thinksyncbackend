@@ -1,68 +1,55 @@
 import mongoose from "mongoose";
 import Offer from "../models/admin_models/Offer.js";
-import Space from "../models/admin_models/Space.js";
+import MarketplaceContent from "../models/super_admin_models/MarketplaceContent.js";
 import CouponRedemption from "../models/admin_models/CouponRedemption.js";
 import Booking from "../models/user_models/Booking.js";
 import {
   ensureSpaceAccess,
   getOwnedSpaceIds,
-  getActorUserId,
   isSuperAdminUser,
 } from "./spaceAccess.service.js";
 
-const ensureSpace = async (spaceId) => {
-  if (!mongoose.Types.ObjectId.isValid(spaceId))
-    throw new Error("Invalid space id");
-  const s = await Space.findById(spaceId).select("_id").lean();
-  if (!s) throw new Error("Space not found");
-  return s;
-};
-
-export const createOffer = async (spaceId, data, user = null) => {
-  await ensureSpaceAccess(spaceId, user);
-
-  if (!data.code) throw new Error("Offer code is required");
-  if (!data.discountType) throw new Error("discountType is required");
-  if (
-    data.discountType === "percentage" &&
-    (data.discountValue <= 0 || data.discountValue > 100)
-  )
-    throw new Error("percentage discountValue must be between 0 and 100");
-  if (new Date(data.validFrom) >= new Date(data.validTill))
-    throw new Error("validFrom must be before validTill");
-
-  // unique code per space or global? model has unique globally; ensure uniqueness for this space (better UX)
-  const existing = await Offer.findOne({
-    code: data.code,
-    space: spaceId,
+async function findOfferByCode(codeUp, session = null) {
+  const platformQuery = MarketplaceContent.findOne({
+    type: "offers",
+    code: codeUp,
     isActive: true,
-  }).lean();
-  if (existing) throw new Error("Offer code already exists for this space");
-
-  const offer = await Offer.create({
-    space: spaceId,
-    code: data.code.toUpperCase().trim(),
-    title: data.title,
-    description: data.description || "",
-    discountType: data.discountType,
-    discountValue: data.discountValue,
-    minBookingAmount: data.minBookingAmount ?? 0,
-    maxDiscountAmount: data.maxDiscountAmount ?? null,
-    validFrom: data.validFrom,
-    validTill: data.validTill,
-    applicablePlanTypes: data.applicablePlanTypes,
-    firstTimeUserOnly: !!data.firstTimeUserOnly,
-    perUserUsageLimit: data.perUserUsageLimit ?? 1,
-    totalUsageLimit: data.totalUsageLimit ?? null,
-    usedCount: 0,
-    stackable: !!data.stackable,
-    isActive: data.isActive === undefined ? true : !!data.isActive,
-    createdBy: getActorUserId(user),
-    updatedBy: getActorUserId(user),
+    deletedAt: null,
   });
 
-  return offer.toObject ? offer.toObject() : offer;
-};
+  if (session) platformQuery.session(session);
+  const platformOffer = await platformQuery;
+  if (platformOffer) return { offer: platformOffer, source: "platform" };
+
+  return { offer: null, source: "" };
+}
+
+function assertOfferValidity(offer, now = new Date()) {
+  const validFrom = offer.validFrom ? new Date(offer.validFrom) : null;
+  const validTill = offer.validTill ? new Date(offer.validTill) : null;
+
+  if (validFrom && validFrom > now) throw new Error("Offer is not valid at this time");
+  if (validTill && validTill < now) throw new Error("Offer is not valid at this time");
+}
+
+function calculateDiscount(offer, bookingAmount) {
+  let discount = 0;
+  if (offer.discountType === "percentage") {
+    discount = (Number(bookingAmount) * Number(offer.discountValue)) / 100;
+    if (offer.maxDiscountAmount != null)
+      discount = Math.min(discount, Number(offer.maxDiscountAmount));
+  } else if (offer.discountType === "flat") {
+    discount = Number(offer.discountValue);
+  } else {
+    discount = 0;
+  }
+
+  return Math.round((discount + Number.EPSILON) * 100) / 100;
+}
+
+function isFirstTimeOnly(offer) {
+  return Boolean(offer.firstTimeUserOnly || offer.firstBookingOnly);
+}
 
 export const listOffers = async (spaceId, user = null) => {
   await ensureSpaceAccess(spaceId, user);
@@ -94,74 +81,6 @@ export const listAllOffers = async (user = null) => {
   return offers;
 };
 
-export const updateOffer = async (spaceId, offerId, data, user = null) => {
-  await ensureSpaceAccess(spaceId, user);
-
-  if (!mongoose.Types.ObjectId.isValid(offerId))
-    throw new Error("Invalid offer id");
-
-  const offer = await Offer.findOne({ _id: offerId, space: spaceId });
-  if (!offer) return null;
-
-  if (data.code && data.code !== offer.code) {
-    const exists = await Offer.findOne({
-      code: data.code.toUpperCase().trim(),
-      space: spaceId,
-      isActive: true,
-    });
-    if (exists)
-      throw new Error(
-        "Another active offer with this code exists for this space",
-      );
-    offer.code = data.code.toUpperCase().trim();
-  }
-
-  if (
-    data.validFrom &&
-    data.validTill &&
-    new Date(data.validFrom) >= new Date(data.validTill)
-  )
-    throw new Error("validFrom must be before validTill");
-
-  const allowed = [
-    "title",
-    "description",
-    "discountType",
-    "discountValue",
-    "minBookingAmount",
-    "maxDiscountAmount",
-    "validFrom",
-    "validTill",
-    "applicablePlanTypes",
-    "firstTimeUserOnly",
-    "perUserUsageLimit",
-    "totalUsageLimit",
-    "stackable",
-    "isActive",
-  ];
-  for (const k of allowed) {
-    if (data[k] !== undefined) offer[k] = data[k];
-  }
-
-  offer.updatedBy = getActorUserId(user);
-  await offer.save();
-  return offer.toObject ? offer.toObject() : offer;
-};
-
-export const deleteOffer = async (spaceId, offerId, user = null) => {
-  await ensureSpaceAccess(spaceId, user);
-  if (!mongoose.Types.ObjectId.isValid(offerId))
-    throw new Error("Invalid offer id");
-
-  const offer = await Offer.findOne({ _id: offerId, space: spaceId });
-  if (!offer) return null;
-
-  offer.isActive = false;
-  offer.updatedBy = getActorUserId(user);
-  await offer.save();
-  return true;
-};
-
 /**
  * Read-only validation + discount calculation for UI preview.
  * DOES NOT modify DB.
@@ -180,17 +99,11 @@ export const validateOfferPreview = async ({
   const now = new Date();
   const codeUp = code.toUpperCase().trim();
 
-  // find offer that either belongs to space or is global (space null/undefined)
-  const offer = await Offer.findOne({
-    code: codeUp,
-    isActive: true,
-    $or: [{ space: spaceId }, { space: { $exists: false } }, { space: null }],
-  });
+  const { offer, source } = await findOfferByCode(codeUp);
 
   if (!offer) throw new Error("Offer not found");
 
-  if (new Date(offer.validFrom) > now || new Date(offer.validTill) < now)
-    throw new Error("Offer is not valid at this time");
+  assertOfferValidity(offer, now);
 
   if (bookingAmount < (offer.minBookingAmount || 0))
     throw new Error(
@@ -207,7 +120,7 @@ export const validateOfferPreview = async ({
     throw new Error("Offer usage limit reached");
 
   // first time user check: read-only preview uses Booking collection
-  if (offer.firstTimeUserOnly && userId) {
+  if (isFirstTimeOnly(offer) && userId) {
     const priorBookings = await Booking.countDocuments({ userId }).exec();
     if (priorBookings > 0)
       throw new Error("Offer valid for first-time users only");
@@ -223,16 +136,7 @@ export const validateOfferPreview = async ({
       throw new Error("You have exceeded the usage limit for this offer");
   }
 
-  // calculate discount
-  let discount = 0;
-  if (offer.discountType === "percentage") {
-    discount = (Number(bookingAmount) * Number(offer.discountValue)) / 100;
-    if (offer.maxDiscountAmount != null)
-      discount = Math.min(discount, Number(offer.maxDiscountAmount));
-  } else {
-    discount = Number(offer.discountValue);
-  }
-  discount = Math.round((discount + Number.EPSILON) * 100) / 100;
+  const discount = calculateDiscount(offer, bookingAmount);
   const finalAmount = Math.max(0, Number(bookingAmount) - discount);
 
   return {
@@ -244,6 +148,7 @@ export const validateOfferPreview = async ({
       discountValue: offer.discountValue,
       maxDiscountAmount: offer.maxDiscountAmount,
       stackable: offer.stackable,
+      source,
     },
     discountAmount: discount,
     finalAmount,
@@ -274,18 +179,12 @@ export const redeemOffer = async ({
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    // Find the offer document inside the session
-    const offer = await Offer.findOne({
-      code: codeUp,
-      isActive: true,
-      $or: [{ space: spaceId }, { space: { $exists: false } }, { space: null }],
-    }).session(session);
+    const { offer, source } = await findOfferByCode(codeUp, session);
 
     if (!offer) throw new Error("Offer not found");
 
     const now = new Date();
-    if (new Date(offer.validFrom) > now || new Date(offer.validTill) < now)
-      throw new Error("Offer expired");
+    assertOfferValidity(offer, now);
 
     if (bookingAmount < (offer.minBookingAmount || 0))
       throw new Error("Booking amount below minimum for offer");
@@ -297,7 +196,7 @@ export const redeemOffer = async ({
       throw new Error("Offer usage limit reached");
 
     // firstTimeUserOnly check against Booking collection (best)
-    if (offer.firstTimeUserOnly) {
+    if (isFirstTimeOnly(offer)) {
       const priorBookings = await Booking.countDocuments({ userId }).session(session);
 
       if (priorBookings > 0)
@@ -313,16 +212,7 @@ export const redeemOffer = async ({
         throw new Error("You have exceeded the usage limit for this offer");
     }
 
-    // compute discount
-    let discount = 0;
-    if (offer.discountType === "percentage") {
-      discount = (Number(bookingAmount) * Number(offer.discountValue)) / 100;
-      if (offer.maxDiscountAmount != null)
-        discount = Math.min(discount, Number(offer.maxDiscountAmount));
-    } else {
-      discount = Number(offer.discountValue);
-    }
-    discount = Math.round((discount + Number.EPSILON) * 100) / 100;
+    const discount = calculateDiscount(offer, bookingAmount);
     const finalAmount = Math.max(0, Number(bookingAmount) - discount);
 
     // Create redemption record
@@ -353,6 +243,7 @@ export const redeemOffer = async ({
       discount,
       finalAmount,
       offerId: offer._id,
+      source,
     };
   } catch (err) {
     await session.abortTransaction();
