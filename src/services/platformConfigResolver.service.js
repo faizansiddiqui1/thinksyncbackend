@@ -94,6 +94,10 @@ function parseStoredRecordValue(definition, record) {
   return coercePlatformConfigValue(definition, record.value);
 }
 
+export function getPlatformConfigRecordValue(definition, record) {
+  return parseStoredRecordValue(definition, record);
+}
+
 async function loadRecords(forceRefresh = false) {
   const cacheIsFresh =
     !forceRefresh &&

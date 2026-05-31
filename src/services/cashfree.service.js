@@ -70,12 +70,23 @@ export async function createCashfreeOrder({
   }
 }
 
-export function verifyCashfreeWebhook({ bodyRaw, signature, secret }) {
-  if (!signature || !secret) return false;
+export function verifyCashfreeWebhook({
+  bodyRaw,
+  signature,
+  timestamp,
+  secret,
+}) {
+  if (!signature || !timestamp || !secret) return false;
 
   const computed = crypto
     .createHmac("sha256", secret)
-    .update(String(bodyRaw))
+    .update(`${timestamp}${String(bodyRaw)}`)
     .digest("base64");
-  return computed === signature;
+  const actualBuffer = Buffer.from(String(signature));
+  const computedBuffer = Buffer.from(computed);
+
+  return (
+    actualBuffer.length === computedBuffer.length &&
+    crypto.timingSafeEqual(actualBuffer, computedBuffer)
+  );
 }

@@ -8,6 +8,7 @@ import {
 import {
   buildPlatformConfigStoragePayload,
   getPlatformConfigEnvValue,
+  getPlatformConfigRecordValue,
   getPlatformConfigRecordMap,
   getPlatformConfigValue,
   invalidatePlatformConfigCache,
@@ -76,6 +77,9 @@ async function createAuditLog({
 
 async function buildClientItem(definition, record) {
   const envValue = getPlatformConfigEnvValue(definition);
+  const overrideValue = record
+    ? getPlatformConfigRecordValue(definition, record)
+    : undefined;
   const resolvedValue = await getPlatformConfigValue(definition.key);
   const hasOverride = Boolean(record);
   const overrideEnabled = Boolean(record?.isEnabled !== false && record);
@@ -105,6 +109,7 @@ async function buildClientItem(definition, record) {
     type: definition.type,
     options: definition.options || [],
     isSensitive: Boolean(definition.isSensitive),
+    isReadOnly: Boolean(definition.isReadOnly),
     hasOverride,
     overrideEnabled,
     source,
@@ -121,6 +126,10 @@ async function buildClientItem(definition, record) {
         ? ""
         : maskPlatformConfigValue(definition, envValue),
     envAvailable: envValue !== undefined,
+    overrideDisplayValue:
+      overrideValue === undefined
+        ? ""
+        : maskPlatformConfigValue(definition, overrideValue),
     updatedAt: record?.updatedAt || null,
     note: record?.note || "",
   };
@@ -194,6 +203,10 @@ export async function upsertPlatformConfigItem({
 
   if (!definition) {
     throw new Error(`Unsupported platform config key: ${key}`);
+  }
+
+  if (definition.isReadOnly) {
+    throw new Error(`${definition.key} is managed by the backend and cannot be overridden`);
   }
 
   const existing = await PlatformConfig.findOne({ key: definition.key }).lean().exec();

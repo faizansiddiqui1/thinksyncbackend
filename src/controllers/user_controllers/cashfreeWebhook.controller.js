@@ -1,9 +1,33 @@
 import { finalizeTempBooking } from "../../services/bookingFinalize.service.js";
+import { verifyCashfreeWebhook } from "../../services/cashfree.service.js";
 import { getPlatformConfigValues } from "../../services/platformConfigResolver.service.js";
 
 export const cashfreeWebhook = async (req, res) => {
   try {
-    const data = JSON.parse(req.body.toString());
+    const bodyRaw = req.body.toString();
+    const runtimeConfig = await getPlatformConfigValues([
+      "CASHFREE_ENV",
+      "CASHFREE_CLIENT_ID",
+      "CASHFREE_CLIENT_SECRET",
+      "CASHFREE_BASE_URL_PROD",
+      "CASHFREE_BASE_URL_TEST",
+      "CASHFREE_API_VERSION",
+    ]);
+    const signature = req.headers["x-webhook-signature"];
+    const timestamp = req.headers["x-webhook-timestamp"];
+
+    if (
+      !verifyCashfreeWebhook({
+        bodyRaw,
+        signature,
+        timestamp,
+        secret: runtimeConfig.CASHFREE_CLIENT_SECRET,
+      })
+    ) {
+      return res.status(401).send("invalid signature");
+    }
+
+    const data = JSON.parse(bodyRaw);
 
     if (data.type !== "PAYMENT_SUCCESS_WEBHOOK") {
       return res.status(200).send("ok");
@@ -13,15 +37,6 @@ export const cashfreeWebhook = async (req, res) => {
     if (!orderId) {
       return res.status(200).send("ok");
     }
-
-    const runtimeConfig = await getPlatformConfigValues([
-      "CASHFREE_ENV",
-      "CASHFREE_CLIENT_ID",
-      "CASHFREE_CLIENT_SECRET",
-      "CASHFREE_BASE_URL_PROD",
-      "CASHFREE_BASE_URL_TEST",
-      "CASHFREE_API_VERSION",
-    ]);
 
     const baseUrl =
       runtimeConfig.CASHFREE_ENV === "prod" ||
