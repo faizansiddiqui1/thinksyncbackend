@@ -6,7 +6,12 @@ import {
   updateGlobalKycConfig,
   updateKycConfig,
 } from "../controllers/super_admin_controllers/adminhandle.controller.js";
-import { getMarketplaceSnapshot } from "../controllers/super_admin_controllers/marketplace.controller.js";
+import {
+  getMarketplaceSnapshot,
+  getSuperAdminSpaceAudit,
+  getSuperAdminSpaces,
+  patchSuperAdminSpaceStatus,
+} from "../controllers/super_admin_controllers/marketplace.controller.js";
 import {
   getPlatformConfigAuditLog,
   getPlatformConfigs,
@@ -22,6 +27,27 @@ router.get(
   requireAuth,
   requireSuperAdmin,
   getMarketplaceSnapshot,
+);
+
+router.get(
+  "/super-admin/spaces",
+  requireAuth,
+  requireSuperAdmin,
+  getSuperAdminSpaces,
+);
+
+router.patch(
+  "/super-admin/spaces/:spaceId/status",
+  requireAuth,
+  requireSuperAdmin,
+  patchSuperAdminSpaceStatus,
+);
+
+router.get(
+  "/super-admin/spaces/:spaceId/audit",
+  requireAuth,
+  requireSuperAdmin,
+  getSuperAdminSpaceAudit,
 );
 
 router.get(

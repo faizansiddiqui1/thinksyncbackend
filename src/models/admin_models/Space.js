@@ -385,6 +385,25 @@ const spaceSchema = new Schema(
 
     adminNotes: String,
 
+    approvalReviewedAt: Date,
+    approvalReviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    operationalStatus: {
+      type: String,
+      enum: ["active", "suspended"],
+      default: "active",
+      index: true,
+    },
+
+    suspendedAt: Date,
+    suspendedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
     internalFlags: {
       verified: { type: Boolean, default: false },
       premium: { type: Boolean, default: false },
@@ -418,6 +437,7 @@ spaceSchema.index({ "address.city": 1 });
 spaceSchema.index({ "address.location": "2dsphere" });
 spaceSchema.index({ averageRating: -1 });
 spaceSchema.index({ isPublished: 1, isFeatured: -1 });
+spaceSchema.index({ approvalStatus: 1, operationalStatus: 1, createdAt: -1 });
 spaceSchema.index({ createdAt: -1 });
 
 /* =========================

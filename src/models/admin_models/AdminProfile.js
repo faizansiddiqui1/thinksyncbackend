@@ -151,6 +151,25 @@ const AdminProfileSchema = new Schema(
         ref: "User",
       },
 
+      rejectedAt: Date,
+
+      rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+
+      reason: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      remarks: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
       permissions: {
         customDomain: {
           type: Boolean,

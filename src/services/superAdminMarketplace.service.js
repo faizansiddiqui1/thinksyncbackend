@@ -14,14 +14,17 @@ const isTrue = (value) =>
 const toId = (value) => {
   if (!value) return null;
   if (typeof value === "string") return value;
-  if (value._id) return toId(value._id);
-  if (value.id) return String(value.id);
+  if (typeof value.toHexString === "function") return value.toHexString();
+  if (value._id && value._id !== value) return toId(value._id);
+  if (value.id && value.id !== value) return String(value.id);
   return String(value);
 };
 
 const uniqueIds = (values = []) => [
   ...new Set(values.map((value) => toId(value)).filter(Boolean)),
 ];
+
+const isObjectId = (value) => /^[a-f\d]{24}$/i.test(toId(value) || "");
 
 const safeDate = (value) => {
   if (!value) return null;
@@ -257,7 +260,9 @@ export async function getMarketplaceSnapshot(options = {}) {
   ]);
   const reviewUserIds = uniqueIds(rawReviews.map((review) => review.user));
   const userIds = uniqueIds([...ownerIds, ...reviewUserIds]);
-  const cityIds = uniqueIds(rawSpaces.map((space) => space?.address?.city));
+  const cityIds = uniqueIds(rawSpaces.map((space) => space?.address?.city)).filter(
+    isObjectId,
+  );
 
   const [users, ownerProfiles, cities] = await Promise.all([
     userIds.length
@@ -421,6 +426,42 @@ export async function getMarketplaceSnapshot(options = {}) {
   const ownerCount = uniqueIds(
     normalizedSpaces.map((space) => space.owner?.id),
   ).length;
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const activeSince = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const [
+    totalUsers,
+    totalAdmins,
+    newUsers,
+    activeUsers,
+    pendingKyc,
+    companyNames,
+  ] = await Promise.all([
+    User.countDocuments({ role: "user" }),
+    User.countDocuments({ role: { $in: ["admin", "super_admin"] } }),
+    User.countDocuments({ createdAt: { $gte: monthStart } }),
+    User.countDocuments({ lastLogin: { $gte: activeSince } }),
+    AdminProfile.countDocuments({ "kyc.status": "pending" }),
+    AdminProfile.distinct("company.name", {
+      "company.name": { $nin: ["", "GLOBAL_DEFAULT", null] },
+    }),
+  ]);
+  const spaceApprovalStatus = normalizedSpaces.reduce(
+    (result, space) => {
+      const status = space.approvalStatus || "pending";
+      result[status] = (result[status] || 0) + 1;
+      return result;
+    },
+    { pending: 0, approved: 0, rejected: 0 },
+  );
+  const whiteLabelApprovalStatus = normalizedWhiteLabelRequests.reduce(
+    (result, profile) => {
+      const status = profile.whiteLabel?.status || "pending";
+      result[status] = (result[status] || 0) + 1;
+      return result;
+    },
+    { pending: 0, approved: 0, rejected: 0 },
+  );
 
   return {
     spaces: normalizedSpaces,
@@ -442,6 +483,18 @@ export async function getMarketplaceSnapshot(options = {}) {
       totalDocuments: normalizedDocuments.length,
       totalWhiteLabelRequests: normalizedWhiteLabelRequests.length,
       totalReviews: normalizedReviews.length,
+      totalCompanies: companyNames.length,
+      totalAdmins,
+      totalUsers,
+      newUsers,
+      activeUsers,
+      pendingKyc,
+      pendingSpaces: spaceApprovalStatus.pending,
+      approvedSpaces: spaceApprovalStatus.approved,
+      rejectedSpaces: spaceApprovalStatus.rejected,
+      pendingSaaS: whiteLabelApprovalStatus.pending,
+      approvedSaaS: whiteLabelApprovalStatus.approved,
+      rejectedSaaS: whiteLabelApprovalStatus.rejected,
     },
     meta: {
       generatedAt: new Date().toISOString(),

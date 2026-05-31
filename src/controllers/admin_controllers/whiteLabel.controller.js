@@ -3,6 +3,7 @@ import Tenant from "../../models/admin_models/tenant.model.js";
 import TenantSecrets from "../../models/admin_models/TenantSecrets.js";
 
 import PaymentGateway from "../../models/admin_models/paymentGateway.model.js";
+import MarketplaceAudit from "../../models/super_admin_models/MarketplaceAudit.js";
 import { encrypt } from "../../utils/crypto.util.js";
 
 function enc(value) {
@@ -192,6 +193,19 @@ export const requestWhiteLabel = async (req, res) => {
     };
 
     await admin.save();
+    await MarketplaceAudit.create({
+      entityType: "white_label",
+      entityId: admin._id,
+      action: "white_label.submitted",
+      actorId: req.user._id,
+      actorRole: req.user.role || "admin",
+      previousState: null,
+      nextState: {
+        status: admin.whiteLabel.status,
+        submittedAt: admin.whiteLabel.request?.submittedAt || null,
+      },
+      notes: admin.whiteLabel.request?.notes || "",
+    });
 
     return res.json({
       success: true,
