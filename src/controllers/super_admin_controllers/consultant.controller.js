@@ -103,8 +103,8 @@ async function resolvePublicCity(city = "") {
     .lean();
 }
 
-function serializePublicConsultantWithSlug(consultant = {}) {
-  const serialized = serializeConsultant(consultant, { publicView: true });
+async function serializePublicConsultantWithSlug(consultant = {}) {
+  const serialized = await serializeConsultant(consultant, { publicView: true });
   if (!serialized) return null;
 
   return {
@@ -407,7 +407,9 @@ export const listPublicConsultants = async (req, res) => {
 
     return res.json({
       success: true,
-      data: consultants.map(serializePublicConsultantWithSlug).filter(Boolean),
+      data: (await Promise.all(
+        consultants.map(serializePublicConsultantWithSlug),
+      )).filter(Boolean),
       context: {
         city,
       },
@@ -449,7 +451,7 @@ export const getPublicConsultant = async (req, res) => {
 
     return res.json({
       success: true,
-      data: serializePublicConsultantWithSlug(consultant),
+      data: await serializePublicConsultantWithSlug(consultant),
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -480,8 +482,10 @@ export const listConsultants = async (req, res) => {
 
     return res.json({
       success: true,
-      data: consultants.map((item) =>
-        serializeConsultant(item, { publicView: false }),
+      data: await Promise.all(
+        consultants.map((item) =>
+          serializeConsultant(item, { publicView: false }),
+        ),
       ),
     });
   } catch (err) {
@@ -504,7 +508,7 @@ export const createConsultant = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Consultant created successfully",
-      data: serializeConsultant(populated, { publicView: false }),
+      data: await serializeConsultant(populated, { publicView: false }),
     });
   } catch (err) {
     return res.status(err.status || 400).json({
@@ -534,7 +538,7 @@ export const updateConsultant = async (req, res) => {
     return res.json({
       success: true,
       message: "Consultant updated successfully",
-      data: serializeConsultant(consultant, { publicView: false }),
+      data: await serializeConsultant(consultant, { publicView: false }),
     });
   } catch (err) {
     return res.status(err.status || 400).json({
@@ -562,7 +566,7 @@ export const deleteConsultantProfileImage = async (req, res) => {
     return res.json({
       success: true,
       message: "Profile image removed",
-      data: serializeConsultant(consultant, { publicView: false }),
+      data: await serializeConsultant(consultant, { publicView: false }),
     });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
@@ -860,7 +864,7 @@ export const getConsultantDashboard = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        consultant: serializeConsultant(consultant, { publicView: false }),
+        consultant: await serializeConsultant(consultant, { publicView: false }),
         total,
         today: todayCount,
         week: weekCount,

@@ -10,7 +10,7 @@ import {
   getPresignForImage,
   getPresignForVideo,
 } from "../controllers/admin_controllers/spaceMedia.controller.js";
-import { requireAuth } from "../middlewares/auth.js";
+import { requireAdminAccess, requireAuth } from "../middlewares/auth.js";
 
 const router = express.Router();
 
@@ -19,21 +19,21 @@ router.get("/space/:spaceId/media", getSpaceMedia);
 
 
 /* ---------- IMAGES ---------- */
-router.post("/uploads/presign", getPresignForImage);
+router.post("/uploads/presign", requireAuth, requireAdminAccess, getPresignForImage);
 
-router.post("/space/:spaceId/media/images", addSpaceImage);
+router.post("/space/:spaceId/media/images", requireAuth, requireAdminAccess, addSpaceImage);
 
-router.put("/space/:spaceId/media/images/:imageId", updateSpaceImage);
+router.put("/space/:spaceId/media/images/:imageId", requireAuth, requireAdminAccess, updateSpaceImage);
 
-router.delete("/space/:spaceId/media/images/:imageId", deleteSpaceImage);
+router.delete("/space/:spaceId/media/images/:imageId", requireAuth, requireAdminAccess, deleteSpaceImage);
 
 /* ---------- VIDEO ---------- */
-router.post("/space/:spaceId/media/video/presign", getPresignForVideo);
+router.post("/space/:spaceId/media/video/presign", requireAuth, requireAdminAccess, getPresignForVideo);
 
-router.post("/space/:spaceId/media/video", requireAuth, addSpaceVideo);
+router.post("/space/:spaceId/media/video", requireAuth, requireAdminAccess, addSpaceVideo);
 
-router.put("/space/:spaceId/media/video", updateSpaceVideo);
+router.put("/space/:spaceId/media/video", requireAuth, requireAdminAccess, updateSpaceVideo);
 
-router.delete("/space/:spaceId/media/video", deleteSpaceVideo);
+router.delete("/space/:spaceId/media/video", requireAuth, requireAdminAccess, deleteSpaceVideo);
 
 export default router;

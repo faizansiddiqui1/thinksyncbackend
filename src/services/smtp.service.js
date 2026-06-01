@@ -1,3 +1,6 @@
+import mongoose from "mongoose";
+import AdminProfile from "../models/admin_models/AdminProfile.js";
+import Tenant from "../models/admin_models/tenant.model.js";
 import { getCredentials } from "./credentialResolver.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 
@@ -29,7 +32,48 @@ async function normalizeSMTP(creds = {}) {
   };
 }
 
-export const getActiveSMTP = async (tenant) => {
+async function resolveSMTPTenant(tenantOrOwner) {
+  if (!tenantOrOwner) return null;
+
+  if (tenantOrOwner.adminProfileId) {
+    return tenantOrOwner;
+  }
+
+  const candidateId =
+    tenantOrOwner.ownerId ||
+    tenantOrOwner.owner ||
+    tenantOrOwner._id ||
+    tenantOrOwner;
+
+  if (!candidateId) return null;
+  if (!mongoose.isValidObjectId(candidateId)) return null;
+
+  const tenant = await Tenant.findById(candidateId)
+    .select("_id adminProfileId ownerId status")
+    .lean();
+
+  if (tenant) return tenant;
+
+  const adminProfile = await AdminProfile.findOne({
+    owner: candidateId,
+  })
+    .select("_id whiteLabel.status")
+    .lean();
+
+  if (!adminProfile || adminProfile.whiteLabel?.status !== "approved") {
+    return null;
+  }
+
+  return Tenant.findOne({
+    adminProfileId: adminProfile._id,
+    status: "active",
+  })
+    .select("_id adminProfileId ownerId status")
+    .lean();
+}
+
+export const getActiveSMTP = async (tenantOrOwner = null) => {
+  const tenant = await resolveSMTPTenant(tenantOrOwner);
   const creds = await getCredentials({ tenant }, "smtp");
 
   const smtp = await normalizeSMTP(creds);

@@ -5,6 +5,23 @@ import PricingPlan from "../../models/admin_models/PricingPlan.js";
 
 const { Schema } = mongoose;
 
+const paymentAttemptSchema = new Schema(
+  {
+    orderId: { type: String, required: true },
+    sessionId: { type: String, default: "" },
+    gateway: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ["created", "processing", "paid", "failed", "expired"],
+      default: "created",
+    },
+    failureReason: { type: String, default: "" },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 /* =========================================================
    PRICE BREAKDOWN
 ========================================================= */
@@ -127,6 +144,13 @@ const addonItemSchema = new Schema(
 
 const bookingSchema = new Schema(
   {
+    bookingId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+
     /* =========================
        USER
     ========================= */
@@ -199,7 +223,7 @@ const bookingSchema = new Schema(
 
       type: {
         type: String,
-        enum: ["hourly", "daily", "monthly", "yearly"],
+        enum: ["hourly", "daily", "weekly", "monthly", "yearly"],
         required: true,
       },
     },
@@ -273,15 +297,19 @@ const bookingSchema = new Schema(
     status: {
       type: String,
       enum: [
+        "draft",
+        "pending_payment",
+        "payment_processing",
         "pending_hold",
         "pending",
         "confirmed",
         "cancelled",
         "completed",
         "expired",
+        "refunded",
         "no_show",
       ],
-      default: "pending_hold",
+      default: "draft",
       index: true,
     },
 
@@ -319,6 +347,11 @@ const bookingSchema = new Schema(
 
       reference: String,
       transactionId: String,
+      paymentSessionId: String,
+      attempts: {
+        type: [paymentAttemptSchema],
+        default: [],
+      },
 
       paidAt: Date,
 
@@ -426,6 +459,30 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    coupon: {
+      code: { type: String, trim: true, uppercase: true, default: "" },
+      offerId: { type: Schema.Types.ObjectId, default: null },
+      discountAmount: { type: Number, default: 0 },
+    },
+
+    reviewMailSentAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    reviewReminder24hSentAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    reviewReminder3dSentAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
     reviewSubmitted: {
       type: Boolean,
       default: false,
@@ -523,6 +580,10 @@ bookingSchema.pre("validate", async function (next) {
 
     if (this.plan?.type === "hourly") {
       duration = this.bookingDuration.totalHours || 1;
+    } else if (this.plan?.type === "weekly") {
+      duration = Math.ceil((this.bookingDuration.totalDays || 1) / 7);
+    } else if (this.plan?.type === "monthly") {
+      duration = Math.ceil((this.bookingDuration.totalDays || 1) / 30);
     } else {
       duration = this.bookingDuration.totalDays || 1;
     }
@@ -534,9 +595,11 @@ bookingSchema.pre("validate", async function (next) {
     ========================= */
 
     if (this.plan?.planId) {
-      const plan = await PricingPlan.findById(
-        this.plan.planId,
-      );
+      const plan = await PricingPlan.findOne({
+        _id: this.plan.planId,
+        space: this.space,
+        isActive: true,
+      });
 
       if (!plan) {
         return next(
@@ -555,7 +618,8 @@ bookingSchema.pre("validate", async function (next) {
       this.resources.forEach((r) => {
         baseAmount +=
           Number(r.unitPrice || 0) *
-          Number(r.quantity || 1);
+          Number(r.quantity || 1) *
+          duration;
       });
     }
 
@@ -613,12 +677,19 @@ bookingSchema.statics.checkAvailability =
     resourceId,
     startDateTime,
     endDateTime,
+    excludeBookingId = null,
   ) {
-    const conflict = await this.findOne({
+    const query = {
       "resources.resourceId": resourceId,
 
       status: {
-        $in: ["pending_hold", "confirmed"],
+        $in: [
+          "draft",
+          "pending_payment",
+          "payment_processing",
+          "pending_hold",
+          "confirmed",
+        ],
       },
 
       $or: [
@@ -640,7 +711,13 @@ bookingSchema.statics.checkAvailability =
       endDateTime: {
         $gt: startDateTime,
       },
-    });
+    };
+
+    if (excludeBookingId) {
+      query._id = { $ne: excludeBookingId };
+    }
+
+    const conflict = await this.findOne(query);
 
     return {
       available: !conflict,
@@ -662,11 +739,15 @@ bookingSchema.index({
 });
 
 bookingSchema.index({
-  status: 1,
+  "payment.status": 1,
 });
 
 bookingSchema.index({
-  "payment.status": 1,
+  "payment.reference": 1,
+});
+
+bookingSchema.index({
+  "payment.attempts.orderId": 1,
 });
 
 bookingSchema.index({
@@ -678,10 +759,6 @@ bookingSchema.index({
 bookingSchema.index({
   reviewMailSent: 1,
   reviewSubmitted: 1,
-});
-
-bookingSchema.index({
-  "invoice.invoiceNumber": 1,
 });
 
 bookingSchema.virtual("isReviewEligible").get(function () {

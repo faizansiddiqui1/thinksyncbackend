@@ -7,7 +7,6 @@ const paymentGatewaySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User", // 👉 owner/admin
       required: true,
-      index: true,
     },
 
     gateway: {

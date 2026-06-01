@@ -9,7 +9,14 @@ import {
 import {
   updateUserProfile,
   changeUserPassword,
+  createUserProfileImageUpload,
+  saveUserProfileImage,
+  deleteUserProfileImage,
 } from "../../services/user.service.js";
+import { buildUserKycPayload } from "../../services/verification.service.js";
+
+const USER_PROFILE_FIELDS =
+  "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone role phoneVerified emailVerified kyc isActive createdAt updatedAt";
 
 export const getUserProfileHandler = async (req, res) => {
   try {
@@ -18,9 +25,12 @@ export const getUserProfileHandler = async (req, res) => {
       return res.status(404).json({ message: "User profile not found" });
     }
 
+    await buildUserKycPayload(req.user._id);
+    const profile = await User.findById(req.user._id).select(USER_PROFILE_FIELDS);
+
     return res.status(200).json({
       success: true,
-      data: req.userProfile,
+      data: profile,
     });
   } catch (err) {
     console.error("getUserProfile error:", err);
@@ -60,7 +70,13 @@ export const updateProfileHandler = async (req, res) => {
 
     // If pending (identifier change) -> 202 Accepted with message
     if (result && result.pending) {
-      return res.status(202).json({ success: true, message: result.message });
+      return res.status(202).json({
+        success: true,
+        message: result.message,
+        pendingType: result.pendingType,
+        pendingIdentifier: result.pendingIdentifier,
+        data: result.user,
+      });
     }
 
     // return updated user (sanitized)
@@ -68,6 +84,59 @@ export const updateProfileHandler = async (req, res) => {
       success: true,
       message: result.message,
       data: result.user,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const createProfileImageUploadHandler = async (req, res) => {
+  try {
+    const tenant = req.context?.tenant || req.tenant || null;
+    const data = await createUserProfileImageUpload(
+      req.user._id,
+      req.body || {},
+      tenant,
+    );
+
+    return res.json({
+      success: true,
+      message: "Profile image upload ready",
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const saveProfileImageHandler = async (req, res) => {
+  try {
+    const tenant = req.context?.tenant || req.tenant || null;
+    const user = await saveUserProfileImage(
+      req.user._id,
+      req.body || {},
+      tenant,
+    );
+
+    return res.json({
+      success: true,
+      message: "Profile image updated",
+      data: user,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deleteProfileImageHandler = async (req, res) => {
+  try {
+    const tenant = req.context?.tenant || req.tenant || null;
+    const user = await deleteUserProfileImage(req.user._id, tenant);
+
+    return res.json({
+      success: true,
+      message: "Profile image removed",
+      data: user,
     });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });

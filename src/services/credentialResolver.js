@@ -1,6 +1,7 @@
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import TenantSecrets from "../models/admin_models/TenantSecrets.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
+import { decrypt } from "../utils/crypto.util.js";
 
 /**
  * Platform-level credentials
@@ -82,7 +83,19 @@ async function getPlatformCredentials() {
  */
 function getSecretFromDoc(secrets, type) {
   if (!secrets) return null;
-  return secrets[type] || null;
+
+  const credentials = secrets[type];
+  if (!credentials) return null;
+
+  return Object.fromEntries(
+    Object.entries(credentials).map(([key, value]) => {
+      if (typeof value === "string" && value.startsWith("enc:")) {
+        return [key, decrypt(value.slice(4))];
+      }
+
+      return [key, value];
+    }),
+  );
 }
 
 /**
@@ -115,7 +128,7 @@ export const getCredentials = async (req, type) => {
   }
 
   // ✅ Approved + using platform
-  if (admin.whiteLabel.usePlatformCredentials === true) {
+  if (admin.whiteLabel.useOwnPlatformCredentials !== true) {
     return platformCreds;
   }
 

@@ -88,8 +88,7 @@ export const getUserReviews = async (req, res) => {
     const { userId } = req.params;
 
     const isOwnProfile = req.user?._id?.toString() === userId;
-    const isAdmin =
-      req.user?.role === "admin" || req.user?.role === "super_admin";
+    const isAdmin = req.user?.role === "super_admin";
 
     if (!isOwnProfile && !isAdmin) {
       return res.status(403).json({
@@ -185,8 +184,7 @@ export const updateReview = async (req, res) => {
 export const deleteReview = async (req, res) => {
   try {
     const { id } = req.params;
-    const isAdmin =
-      req.user?.role === "admin" || req.user?.role === "super_admin";
+    const isAdmin = req.user?.role === "super_admin";
 
     const result = await reviewService.deleteReview(
       id,

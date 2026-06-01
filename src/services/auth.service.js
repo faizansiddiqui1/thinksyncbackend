@@ -18,6 +18,7 @@ import { normalizePhone } from "../utils/phoneUtils.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 import * as googleCalendarService from "./googleCalendar.service.js";
 import Booking from "../models/user_models/Booking.js";
+import { normalizeUsername } from "../utils/usernameUtils.js";
 
 async function getAuthRuntimeConfig() {
   const values = await getPlatformConfigValues([
@@ -255,12 +256,6 @@ const issueOtp = async (user, target, isMail, tenant) => {
   return true;
 };
 
-const normalizeUsername = (username) => {
-  if (username === undefined || username === null) return null;
-  const normalized = String(username).trim().toLowerCase();
-  return normalized || null;
-};
-
 const ensureUsernameAvailable = async (normalizedUsername) => {
   if (!normalizedUsername) return;
   const existingByUsername = await User.findOne({
@@ -303,9 +298,7 @@ export const sendOtp = async ({
   }
 
   if (normalizedIntent === "signup") {
-    if (!normalizedUsername) {
-      throw new Error("Username is required");
-    }
+    normalizeUsername(normalizedUsername, { required: true });
 
     if (user) {
       throw new Error("Account already exists. Please login.");
@@ -323,9 +316,7 @@ export const sendOtp = async ({
   }
 
   if (normalizedIntent === "admin-signup") {
-    if (!normalizedUsername) {
-      throw new Error("Username is required");
-    }
+    normalizeUsername(normalizedUsername, { required: true });
 
     if (user) {
       throw new Error("Admin account already exists. Please login.");

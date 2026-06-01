@@ -139,10 +139,10 @@ export const reviewValidation = {
       .withMessage('Rating must be between 1 and 5'),
 
     body('comment')
-      .notEmpty()
-      .isLength({ min: 10, max: 1000 })
+      .optional({ values: 'falsy' })
+      .isLength({ max: 1500 })
       .withMessage(
-        'Review comment must be between 10 and 1000 characters'
+        'Review comment must be at most 1500 characters'
       )
   ]
 };

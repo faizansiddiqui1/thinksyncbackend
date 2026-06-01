@@ -53,6 +53,11 @@ const AdminProfileSchema = new Schema(
         default: "none",
       },
 
+      useOwnPlatformCredentials: {
+        type: Boolean,
+        default: false,
+      },
+
       request: {
         personalBranding: {
           type: Boolean,

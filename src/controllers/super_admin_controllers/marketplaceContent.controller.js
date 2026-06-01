@@ -3,6 +3,26 @@ import mongoose from "mongoose";
 import MarketplaceContent, {
   createContentSlug,
 } from "../../models/super_admin_models/MarketplaceContent.js";
+import {
+  createPresignedUpload,
+  createSignedGetUrl,
+  deleteFromStorage,
+} from "../../config/s3.js";
+
+const CMS_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const CMS_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const CMS_IMAGE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+const ADMIN_SORT_FIELDS = new Set([
+  "title",
+  "priority",
+  "createdAt",
+  "updatedAt",
+  "publishedAt",
+]);
 
 const TYPE_ALIASES = {
   offer: "offers",
@@ -23,6 +43,10 @@ function normalizeType(value = "") {
 
 function parseLimit(value, fallback = 10) {
   return Math.min(Math.max(Number(value) || fallback, 1), 100);
+}
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function cleanText(value, fallback = "") {
@@ -97,6 +121,51 @@ function cleanSeo(value = {}) {
   };
 }
 
+function createHttpError(message, status = 400) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function getTenant(req) {
+  return req.context?.tenant || req.tenant || null;
+}
+
+function getMediaKeys(item = {}) {
+  return [item.image?.key, item.logo?.key].filter(Boolean);
+}
+
+async function cleanupMediaKeys(keys = [], tenant = null) {
+  const uniqueKeys = [...new Set(keys.filter((key) => String(key).startsWith("marketplace-content/")))];
+  await Promise.allSettled(uniqueKeys.map((key) => deleteFromStorage({ tenant, key })));
+}
+
+async function hydrateImage(image = {}, tenant = null) {
+  if (!image?.key) return image || {};
+
+  const url = await createSignedGetUrl({
+    tenant,
+    key: image.key,
+    expiresSeconds: CMS_IMAGE_URL_TTL_SECONDS,
+  }).catch(() => image.url || "");
+
+  return { ...image, url };
+}
+
+async function hydrateItem(item, tenant = null) {
+  if (!item) return item;
+  const source = typeof item.toObject === "function" ? item.toObject() : item;
+  const [image, logo] = await Promise.all([
+    hydrateImage(source.image, tenant),
+    hydrateImage(source.logo, tenant),
+  ]);
+  return { ...source, image, logo };
+}
+
+async function hydrateItems(items = [], tenant = null) {
+  return Promise.all(items.map((item) => hydrateItem(item, tenant)));
+}
+
 function buildPayload(type, body = {}, userId = null) {
   const title = cleanText(body.title || body.name || body.partnerName || body.personName);
 
@@ -149,14 +218,26 @@ function buildPayload(type, body = {}, userId = null) {
       body.metadata && typeof body.metadata === "object" ? body.metadata : {},
     priority: cleanNumber(body.priority, 100),
     isActive: body.isActive !== false,
-    publishedAt: cleanDate(body.publishedAt),
+    publishedAt: body.isActive === false ? null : cleanDate(body.publishedAt) || new Date(),
     updatedBy: userId,
   };
 
   if (type !== "offers") {
     payload.discountType = "";
-  } else if (!["percentage", "flat", "special"].includes(payload.discountType)) {
-    payload.discountType = "percentage";
+  } else {
+    if (!payload.code) throw createHttpError("Offer code is required");
+    if (!["percentage", "flat"].includes(payload.discountType)) {
+      throw createHttpError("Offer discount type must be percentage or flat");
+    }
+    if (payload.discountValue <= 0) {
+      throw createHttpError("Offer discount value must be greater than zero");
+    }
+    if (payload.discountType === "percentage" && payload.discountValue > 100) {
+      throw createHttpError("Percentage discount cannot exceed 100");
+    }
+    if (payload.validFrom && payload.validTill && payload.validTill < payload.validFrom) {
+      throw createHttpError("Offer valid till date must be after valid from date");
+    }
   }
 
   return payload;
@@ -194,7 +275,7 @@ export async function listPublicContent(req, res) {
     const skip = (page - 1) * limit;
     const filter = publicFilter(type);
 
-    const [items, total] = await Promise.all([
+    const [rawItems, total] = await Promise.all([
       MarketplaceContent.find(filter)
         .sort({ priority: 1, publishedAt: -1, createdAt: -1 })
         .skip(skip)
@@ -202,6 +283,7 @@ export async function listPublicContent(req, res) {
         .lean(),
       MarketplaceContent.countDocuments(filter),
     ]);
+    const items = await hydrateItems(rawItems, getTenant(req));
 
     return res.json({
       success: true,
@@ -227,15 +309,16 @@ export async function getPublicContent(req, res) {
       return res.status(404).json({ success: false, message: "Content not found" });
     }
 
-    const item = await MarketplaceContent.findOne({
+    const rawItem = await MarketplaceContent.findOne({
       ...publicFilter(type),
       slug,
     }).lean();
 
-    if (!item) {
+    if (!rawItem) {
       return res.status(404).json({ success: false, message: "Content not found" });
     }
 
+    const item = await hydrateItem(rawItem, getTenant(req));
     return res.json({ success: true, data: item });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -252,7 +335,7 @@ export async function listAdminContent(req, res) {
     if (req.query.active === "false") filter.isActive = false;
 
     if (req.query.q) {
-      const q = String(req.query.q).trim();
+      const q = escapeRegex(String(req.query.q).trim());
       filter.$or = [
         { title: { $regex: q, $options: "i" } },
         { slug: { $regex: q, $options: "i" } },
@@ -261,11 +344,33 @@ export async function listAdminContent(req, res) {
       ];
     }
 
-    const items = await MarketplaceContent.find(filter)
-      .sort({ priority: 1, updatedAt: -1 })
-      .lean();
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = parseLimit(req.query.limit, 10);
+    const skip = (page - 1) * limit;
+    const sortBy = ADMIN_SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : "updatedAt";
+    const sortDirection = req.query.sortDir === "asc" ? 1 : -1;
 
-    return res.json({ success: true, data: items });
+    const [rawItems, total] = await Promise.all([
+      MarketplaceContent.find(filter)
+      .sort({ [sortBy]: sortDirection, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      MarketplaceContent.countDocuments(filter),
+    ]);
+    const items = await hydrateItems(rawItems, getTenant(req));
+
+    return res.json({
+      success: true,
+      data: items,
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit) || 1,
+        hasMore: page * limit < total,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -283,7 +388,7 @@ export async function createAdminContent(req, res) {
     return res.status(201).json({
       success: true,
       message: "Marketplace content created",
-      data: item,
+      data: await hydrateItem(item, getTenant(req)),
     });
   } catch (err) {
     return res.status(err.status || 400).json({ success: false, message: err.message });
@@ -299,6 +404,15 @@ export async function updateAdminContent(req, res) {
     }
 
     const payload = buildPayload(type, req.body, req.user?._id || null);
+    const original = await MarketplaceContent.findOne({
+      _id: id,
+      type,
+      deletedAt: null,
+    }).lean();
+    if (!original) {
+      return res.status(404).json({ success: false, message: "Content not found" });
+    }
+
     const item = await MarketplaceContent.findOneAndUpdate(
       { _id: id, type, deletedAt: null },
       payload,
@@ -309,10 +423,13 @@ export async function updateAdminContent(req, res) {
       return res.status(404).json({ success: false, message: "Content not found" });
     }
 
+    const removedKeys = getMediaKeys(original).filter((key) => !getMediaKeys(item).includes(key));
+    await cleanupMediaKeys(removedKeys, getTenant(req));
+
     return res.json({
       success: true,
       message: "Marketplace content updated",
-      data: item,
+      data: await hydrateItem(item, getTenant(req)),
     });
   } catch (err) {
     return res.status(err.status || 400).json({ success: false, message: err.message });
@@ -341,8 +458,101 @@ export async function deleteAdminContent(req, res) {
       return res.status(404).json({ success: false, message: "Content not found" });
     }
 
+    await cleanupMediaKeys(getMediaKeys(item), getTenant(req));
     return res.json({ success: true, message: "Marketplace content deleted" });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+export async function bulkUpdateAdminContent(req, res) {
+  try {
+    const type = normalizeType(req.params.type);
+    const ids = cleanArray(req.body.ids)
+      .map((id) => String(id))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const action = cleanText(req.body.action).toLowerCase();
+
+    if (!type || !ids.length) throw createHttpError("Select at least one valid content item");
+    if (!["activate", "deactivate", "delete"].includes(action)) {
+      throw createHttpError("Unknown bulk action");
+    }
+
+    const filter = { _id: { $in: ids }, type, deletedAt: null };
+    const update = {
+      updatedBy: req.user?._id || null,
+      ...(action === "activate" ? { isActive: true, publishedAt: new Date() } : {}),
+      ...(action === "deactivate" ? { isActive: false } : {}),
+      ...(action === "delete" ? { isActive: false, deletedAt: new Date() } : {}),
+    };
+
+    if (action === "delete") {
+      const items = await MarketplaceContent.find(filter).select("image logo").lean();
+      await cleanupMediaKeys(items.flatMap(getMediaKeys), getTenant(req));
+    }
+
+    const result = await MarketplaceContent.updateMany(filter, update);
+    return res.json({
+      success: true,
+      message: `${result.modifiedCount || 0} content items updated`,
+      data: { modifiedCount: result.modifiedCount || 0 },
+    });
+  } catch (err) {
+    return res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+}
+
+export async function createMarketplaceContentUpload(req, res) {
+  try {
+    const type = normalizeType(req.body.type);
+    const filename = cleanText(req.body.filename);
+    const contentType = cleanText(req.body.contentType).toLowerCase();
+    const size = cleanNumber(req.body.size);
+    const itemId = cleanText(req.body.itemId, "new");
+
+    if (!type) throw createHttpError("Valid marketplace content type is required");
+    if (!filename || !CMS_IMAGE_TYPES.has(contentType)) {
+      throw createHttpError("Upload a jpg, jpeg, png, or webp image");
+    }
+    if (size <= 0 || size > CMS_IMAGE_MAX_BYTES) {
+      throw createHttpError("Image size must be between 1 byte and 8 MB");
+    }
+
+    const extension = contentType === "image/jpeg" ? "jpg" : contentType.split("/")[1];
+    const random = Math.random().toString(36).slice(2, 8);
+    const key = `marketplace-content/${type}/${itemId || "new"}/${Date.now()}_${random}.${extension}`;
+    const tenant = getTenant(req);
+    const upload = await createPresignedUpload({
+      tenant,
+      key,
+      contentType,
+      expiresSeconds: 900,
+    });
+    const previewUrl = await createSignedGetUrl({
+      tenant,
+      key,
+      expiresSeconds: CMS_IMAGE_URL_TTL_SECONDS,
+    }).catch(() => "");
+
+    return res.json({
+      success: true,
+      message: "Marketplace image upload URL generated",
+      data: { ...upload, previewUrl },
+    });
+  } catch (err) {
+    return res.status(err.status || 400).json({ success: false, message: err.message });
+  }
+}
+
+export async function deleteMarketplaceContentUpload(req, res) {
+  try {
+    const key = cleanText(req.body.key);
+    if (!key.startsWith("marketplace-content/")) {
+      throw createHttpError("Invalid marketplace image key");
+    }
+    await deleteFromStorage({ tenant: getTenant(req), key });
+    return res.json({ success: true, message: "Marketplace image deleted" });
+  } catch (err) {
+    return res.status(err.status || 400).json({ success: false, message: err.message });
   }
 }

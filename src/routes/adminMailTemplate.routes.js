@@ -8,6 +8,8 @@ import {
   getMailTemplateMeta,
   listMailTemplates,
   previewMailTemplate,
+  restoreMailTemplateDefault,
+  sendTestMailTemplate,
   toggleMailTemplateStatus,
   updateMailTemplate,
 } from "../controllers/super_admin_controllers/adminMailTemplate.controller.js";
@@ -18,11 +20,13 @@ router.use(requireAuth, requireSuperAdmin);
 
 router.get("/meta", getMailTemplateMeta);
 router.post("/preview", previewMailTemplate);
+router.post("/test", sendTestMailTemplate);
 router.get("/", listMailTemplates);
 router.post("/", createMailTemplate);
 router.get("/:id", getMailTemplateById);
 router.put("/:id", updateMailTemplate);
 router.patch("/:id/status", toggleMailTemplateStatus);
+router.post("/:id/restore-default", restoreMailTemplateDefault);
 router.delete("/:id", deleteMailTemplate);
 
 export default router;

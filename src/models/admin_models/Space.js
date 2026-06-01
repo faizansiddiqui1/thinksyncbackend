@@ -431,9 +431,7 @@ spaceSchema.pre("validate", function (next) {
 /* =========================
    INDEXES
 ========================= */
-spaceSchema.index({ slug: 1 });
 spaceSchema.index({ spaceType: 1, "address.city": 1 });
-spaceSchema.index({ "address.city": 1 });
 spaceSchema.index({ "address.location": "2dsphere" });
 spaceSchema.index({ averageRating: -1 });
 spaceSchema.index({ isPublished: 1, isFeatured: -1 });

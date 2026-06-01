@@ -1,4 +1,3 @@
-console.log("✅ BOOKING ROUTES REGISTERED");
 // routes/booking.routes.js (demo GET for listings integration)
 import express from "express";
 import {
@@ -17,6 +16,8 @@ import {
   getOwnerBookings,
   getMyBookings,
   getMyBookingById,
+  getMyCheckoutBooking,
+  retryMyBookingPayment,
   cancelMyBooking,
 } from "../controllers/user_controllers/booking.controller.js";
 
@@ -33,14 +34,16 @@ import Booking from "../models/user_models/Booking.js";
 
 const router = express.Router();
 
-router.post("/booking", createBooking);
+router.post("/booking", requireAuth, createBooking);
 // alias for compatibility
-router.post("/bookings", createBooking);
+router.post("/bookings", requireAuth, createBooking);
 router.post("/booking/internal", requireAuth, createInternalBooking);
 
 
 
 router.get("/me/bookings", requireAuth, getMyBookings);
+router.get("/me/bookings/:id/checkout", requireAuth, getMyCheckoutBooking);
+router.post("/me/bookings/:id/retry-payment", requireAuth, retryMyBookingPayment);
 router.get("/me/bookings/:id", requireAuth, getMyBookingById);
 router.post("/me/bookings/:id/cancel", requireAuth, cancelMyBooking);
 
@@ -58,14 +61,14 @@ router.get(
 
 router.post(
   "/credentials",
-  // requireAuth,
-  // requireAdminAccess,
+  requireAuth,
+  requireAdminAccess,
   validateGatewayPayload,
   saveGatewayCredentials,
 );
 
 // /api/payout/
-router.post("/razorpay/verify", verifyRazorpayPayment);
+router.post("/razorpay/verify", requireAuth, verifyRazorpayPayment);
 
 router.get("/bookings/:id", getBooking);
 

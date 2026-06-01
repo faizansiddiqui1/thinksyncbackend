@@ -141,6 +141,11 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     description: "Booked workspace display name.",
     sample: "Harbor Meeting Loft",
   },
+  workspaceAddress: {
+    label: "Workspace address",
+    description: "Readable workspace address for visits and booking access.",
+    sample: "Gate A, Harbor Business Park, Mumbai",
+  },
   workspaceType: {
     label: "Workspace type",
     description: "Meeting room, private cabin, shared desk, event space, or day pass.",
@@ -155,6 +160,21 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     label: "Booking date",
     description: "Formatted booking date.",
     sample: "26 May 2026",
+  },
+  startTime: {
+    label: "Start time",
+    description: "Formatted booking start time.",
+    sample: "10:00 AM",
+  },
+  endTime: {
+    label: "End time",
+    description: "Formatted booking end time.",
+    sample: "01:00 PM",
+  },
+  duration: {
+    label: "Duration",
+    description: "Readable booking duration.",
+    sample: "3 hours",
   },
   bookingStart: {
     label: "Booking start",
@@ -205,6 +225,21 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     label: "Support email",
     description: "Customer support mailbox.",
     sample: "support@thinksyncspace.com",
+  },
+  city: {
+    label: "City",
+    description: "Workspace or enquiry city.",
+    sample: "Mumbai",
+  },
+  enquiryId: {
+    label: "Enquiry ID",
+    description: "Marketplace enquiry reference.",
+    sample: "ENQ-4721",
+  },
+  enquiryService: {
+    label: "Enquiry service",
+    description: "Requested workspace product or service.",
+    sample: "Private Office",
   },
   reviewLink: {
     label: "Review link",
@@ -465,6 +500,92 @@ export const SYSTEM_EMAIL_TEMPLATE_DEFINITIONS = [
     ],
   },
   {
+    name: "booking_confirmed",
+    displayName: "Booking Confirmed",
+    description: "Production booking confirmation sent after successful payment.",
+    category: "booking",
+    isActive: true,
+    isSystem: true,
+    subject: "Booking confirmed: {{workspaceName}}",
+    html: createEmailShell({
+      accent: "#1d4ed8",
+      eyebrow: "Booking Confirmed",
+      title: "Your workspace is reserved",
+      intro:
+        "Hi {{userName}}, your booking has been confirmed successfully. Keep this summary handy for your visit.",
+      body: `
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;border-collapse:collapse;border-radius:18px;overflow:hidden;background:#f8fafc;">
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Booking ID:</strong> {{bookingId}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Workspace:</strong> {{workspaceName}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Date:</strong> {{bookingDate}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Time:</strong> {{startTime}} to {{endTime}}</td></tr>
+          <tr><td style="padding:14px 18px;"><strong>Duration:</strong> {{duration}}</td></tr>
+        </table>
+        <div style="margin:24px 0;">
+          <a href="{{manageBookingLink}}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:999px;background:#1d4ed8;padding:14px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">View booking</a>
+        </div>
+      `,
+      footer:
+        "Questions about your booking? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: [
+      "userName",
+      "bookingId",
+      "workspaceName",
+      "bookingDate",
+      "startTime",
+      "endTime",
+      "duration",
+      "manageBookingLink",
+      "supportEmail",
+      "platformName",
+      "year",
+    ],
+  },
+  {
+    name: "short_term_booking_access",
+    displayName: "Short Term Booking Access",
+    description: "Existing security-access QR pass for short-term workspace bookings.",
+    category: "booking",
+    isActive: true,
+    isSystem: true,
+    subject: "Your access pass for {{workspaceName}}",
+    html: createEmailShell({
+      accent: "#0f766e",
+      eyebrow: "Workspace Access",
+      title: "Your booking access pass",
+      intro:
+        "Present this QR code at the workspace entrance. This is the same pass linked to your confirmed booking.",
+      body: `
+        <div style="margin:18px 0;text-align:center;">
+          <img src="{{accessQrImage}}" alt="Booking access QR" width="220" height="220" style="max-width:220px;width:100%;height:auto;border-radius:18px;background:#ffffff;padding:12px;border:1px solid #e2e8f0;" />
+        </div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;border-collapse:collapse;border-radius:18px;overflow:hidden;background:#f8fafc;">
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Booking ID:</strong> {{bookingId}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Workspace:</strong> {{workspaceName}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Address:</strong> {{workspaceAddress}}</td></tr>
+          <tr><td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;"><strong>Access code:</strong> {{accessCode}}</td></tr>
+          <tr><td style="padding:14px 18px;"><strong>Validity:</strong> {{accessValidity}}</td></tr>
+        </table>
+        <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#334155;">{{accessInstructions}}</p>
+      `,
+      footer:
+        "For access support, contact {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: [
+      "bookingId",
+      "workspaceName",
+      "workspaceAddress",
+      "accessQrImage",
+      "accessCode",
+      "accessValidity",
+      "accessInstructions",
+      "supportEmail",
+      "platformName",
+      "year",
+    ],
+  },
+  {
     name: "password_reset",
     displayName: "Password Reset",
     description: "Password reset email template.",
@@ -562,6 +683,218 @@ export const SYSTEM_EMAIL_TEMPLATE_DEFINITIONS = [
       "platformName",
       "year",
     ],
+  },
+  {
+    name: "booking_completed_review_request",
+    displayName: "Booking Completed Review Request",
+    description: "Initial workspace review request sent after booking completion.",
+    category: "review",
+    isActive: true,
+    isSystem: true,
+    subject: "How was your workspace experience?",
+    html: createEmailShell({
+      accent: "#0f766e",
+      eyebrow: "Review Request",
+      title: "How was your workspace experience?",
+      intro:
+        "Thank you for using {{platformName}}. We hope you enjoyed your workspace experience at {{workspaceName}}.",
+      body: `
+        <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#334155;">
+          Your feedback helps other teams choose confidently and helps us maintain quality.
+        </p>
+        <div style="margin:24px 0;">
+          <a href="{{reviewLink}}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:999px;background:#0f766e;padding:14px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">Leave review</a>
+        </div>
+      `,
+      footer:
+        "Need assistance instead? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: [
+      "workspaceName",
+      "reviewLink",
+      "supportEmail",
+      "platformName",
+      "year",
+    ],
+  },
+  {
+    name: "booking_review_reminder_24h",
+    displayName: "Booking Review Reminder - 24 Hours",
+    description: "First review reminder, sent once 24 hours after completion.",
+    category: "review",
+    isActive: true,
+    isSystem: true,
+    subject: "A quick reminder to review {{workspaceName}}",
+    html: createEmailShell({
+      accent: "#0369a1",
+      eyebrow: "Review Reminder",
+      title: "Your feedback would help",
+      intro:
+        "If you have a moment, tell us how your recent experience at {{workspaceName}} went.",
+      body: `
+        <div style="margin:24px 0;">
+          <a href="{{reviewLink}}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:999px;background:#0369a1;padding:14px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">Leave review</a>
+        </div>
+      `,
+      footer:
+        "This is a one-time reminder. For help, email {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: [
+      "workspaceName",
+      "reviewLink",
+      "supportEmail",
+      "platformName",
+      "year",
+    ],
+  },
+  {
+    name: "booking_review_reminder_3d",
+    displayName: "Booking Review Reminder - 3 Days",
+    description: "Final review reminder, sent once three days after completion.",
+    category: "review",
+    isActive: true,
+    isSystem: true,
+    subject: "Final reminder: review {{workspaceName}}",
+    html: createEmailShell({
+      accent: "#7c3aed",
+      eyebrow: "Final Review Reminder",
+      title: "Share your workspace experience",
+      intro:
+        "This is the final reminder for your recent booking at {{workspaceName}}. A short rating is enough.",
+      body: `
+        <div style="margin:24px 0;">
+          <a href="{{reviewLink}}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:999px;background:#7c3aed;padding:14px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">Leave review</a>
+        </div>
+      `,
+      footer:
+        "No more review reminders will be sent for this booking. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: [
+      "workspaceName",
+      "reviewLink",
+      "platformName",
+      "year",
+    ],
+  },
+  {
+    name: "private_office_enquiry_confirmation",
+    displayName: "Private Office Enquiry Confirmation",
+    description: "Confirmation sent when a private office enquiry is received.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your private office enquiry",
+    html: createEmailShell({
+      accent: "#1d4ed8",
+      eyebrow: "Private Office Enquiry",
+      title: "Your enquiry has been received",
+      intro:
+        "Congratulations, {{userName}}. Our workspace team will review your private office requirements and contact you shortly.",
+      body: `
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>
+      `,
+      footer:
+        "Need assistance? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
+  },
+  {
+    name: "virtual_office_enquiry_confirmation",
+    displayName: "Virtual Office Enquiry Confirmation",
+    description: "Confirmation sent for business-address and virtual-office enquiries.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your virtual office enquiry",
+    html: createEmailShell({
+      accent: "#7c3aed",
+      eyebrow: "Virtual Office Enquiry",
+      title: "Your virtual office request is in",
+      intro:
+        "Hi {{userName}}, our team will guide you through business-address options, the documentation process, and the expected activation timeline.",
+      body: `
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>
+      `,
+      footer:
+        "For documentation support, contact {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
+  },
+  {
+    name: "meeting_room_enquiry_confirmation",
+    displayName: "Meeting Room Enquiry Confirmation",
+    description: "Confirmation sent for meeting-room enquiries.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your meeting room enquiry",
+    html: createEmailShell({
+      accent: "#0f766e",
+      eyebrow: "Meeting Room Enquiry",
+      title: "We are checking the right meeting space",
+      intro:
+        "Hi {{userName}}, our team will review meeting-room availability and contact you shortly.",
+      body: `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>`,
+      footer: "Questions? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
+  },
+  {
+    name: "coworking_enquiry_confirmation",
+    displayName: "Coworking Enquiry Confirmation",
+    description: "Confirmation sent for coworking enquiries.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your coworking enquiry",
+    html: createEmailShell({
+      accent: "#ea580c",
+      eyebrow: "Coworking Enquiry",
+      title: "We are finding the right workspace",
+      intro:
+        "Hi {{userName}}, our team will review coworking options for your requirement and contact you shortly.",
+      body: `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>`,
+      footer: "Questions? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
+  },
+  {
+    name: "hot_desk_enquiry_confirmation",
+    displayName: "Hot Desk Enquiry Confirmation",
+    description: "Confirmation sent for hot-desk enquiries.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your hot desk enquiry",
+    html: createEmailShell({
+      accent: "#be123c",
+      eyebrow: "Hot Desk Enquiry",
+      title: "Your hot desk enquiry is in",
+      intro:
+        "Hi {{userName}}, our team will review available flexible seating options and contact you shortly.",
+      body: `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>`,
+      footer: "Questions? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
+  },
+  {
+    name: "workspace_enquiry_confirmation",
+    displayName: "Workspace Enquiry Confirmation",
+    description: "Fallback confirmation for marketplace enquiries.",
+    category: "enquiry",
+    isActive: true,
+    isSystem: true,
+    subject: "We received your {{enquiryService}} enquiry",
+    html: createEmailShell({
+      accent: "#0f172a",
+      eyebrow: "Workspace Enquiry",
+      title: "Your enquiry has been received",
+      intro:
+        "Hi {{userName}}, our workspace team will review your requirements and contact you shortly.",
+      body: `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;"><strong>Service:</strong> {{enquiryService}}<br /><strong>Workspace:</strong> {{workspaceName}}<br /><strong>City:</strong> {{city}}<br /><strong>Enquiry ID:</strong> {{enquiryId}}</p>`,
+      footer: "Questions? Reach us at {{supportEmail}}. Copyright {{year}} {{platformName}}.",
+    }),
+    allowedVariables: ["userName", "enquiryService", "workspaceName", "city", "enquiryId", "supportEmail", "platformName", "year"],
   },
   {
     name: "new_device_login_alert",

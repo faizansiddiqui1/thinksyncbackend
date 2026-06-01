@@ -6,6 +6,7 @@ import AdminProfile from "../../models/admin_models/AdminProfile.js";
 import Consultant from "../../models/super_admin_models/Consultant.js";
 import LeadEmailTemplate from "../../models/super_admin_models/LeadEmailTemplate.js";
 import sendEmailWithFallback from "../../utils/sendEmailWithFallback.js";
+import { sendEnquiryConfirmationEmail } from "../../services/mail.service.js";
 import {
   findMatchingConsultant,
   getConsultantForUser,
@@ -186,6 +187,15 @@ async function userCanOperateLead(req, leadId) {
   return Boolean(lead && String(lead.consultantId || "") === String(consultant._id));
 }
 
+function queueEnquiryConfirmation(enquiry) {
+  sendEnquiryConfirmationEmail({ enquiry }).catch((error) => {
+    console.error(
+      "enquiry confirmation email failed:",
+      error.message,
+    );
+  });
+}
+
 // Public create enquiry
 export const createEnquiry = async (req, res) => {
   try {
@@ -244,6 +254,8 @@ export const createEnquiry = async (req, res) => {
         source: isAdminLike ? "logged_in_admin" : "logged_in_user",
       });
 
+      queueEnquiryConfirmation(enquiry);
+
       return res.status(201).json({
         success: true,
         message: "Enquiry created successfully",
@@ -273,6 +285,8 @@ export const createEnquiry = async (req, res) => {
       source: "public_form",
       submittedByRole: "public",
     });
+
+    queueEnquiryConfirmation(enquiry);
 
     return res.status(201).json({
       success: true,

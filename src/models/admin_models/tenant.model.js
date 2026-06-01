@@ -58,6 +58,4 @@ const TenantSchema = new Schema(
 );
 
 // 🔥 Index (important for fast lookup)
-TenantSchema.index({ domain: 1 });
-
 export default mongoose.model("Tenant", TenantSchema);

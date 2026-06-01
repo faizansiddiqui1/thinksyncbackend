@@ -10,20 +10,24 @@ import { finalizeTempBooking } from "../../services/bookingFinalize.service.js";
 export const createBooking = async (req, res) => {
   try {
 
-    console.log("Booking payload cheack", req.body);
-    
     const errors = validationResult(req);
+    
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
 
-    // Pass tenantId if provided in body/header, else derive from space
+    const bookingPayload = {
+      ...req.body,
+      userId: req.user._id,
+    };
     const tenantIdOverride =
-      req.body.tenantId || req.header("X-Tenant-Id") || null;
+      req.user?.role === "super_admin"
+        ? req.body.tenantId || req.header("X-Tenant-Id") || null
+        : null;
 
     const result = await bookingService.createBooking(
-      req.body,
+      bookingPayload,
       tenantIdOverride,
     );
     if (!result.success) {
@@ -61,8 +65,6 @@ export const verifyRazorpayPayment = async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    console.log("🔥 VERIFY HIT:", req.body);
-
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
@@ -79,6 +81,21 @@ export const verifyRazorpayPayment = async (req, res) => {
       return res.status(404).json({
         success: false,
         error: "Temp booking not found",
+      });
+    }
+
+    const bookingUserId =
+      temp.bookingData?.user?.userId ||
+      temp.bookingData?.userId ||
+      null;
+
+    if (
+      bookingUserId &&
+      String(bookingUserId) !== String(req.user?._id || "")
+    ) {
+      return res.status(403).json({
+        success: false,
+        error: "This payment session belongs to another user",
       });
     }
 
@@ -120,8 +137,6 @@ export const verifyRazorpayPayment = async (req, res) => {
     if (!result.success) {
       return res.status(400).json(result);
     }
-
-    console.log("🎉 BOOKING CONFIRMED:", razorpay_order_id);
 
     return res.json({ success: true });
   } catch (error) {
@@ -215,6 +230,30 @@ export const getMyBookingById = async (req, res) => {
     }
 
     return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+export const getMyCheckoutBooking = async (req, res) => {
+  try {
+    const result = await bookingService.getCheckoutBooking(
+      req.user._id,
+      req.params.id,
+    );
+    return res.status(result.success ? 200 : 404).json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+export const retryMyBookingPayment = async (req, res) => {
+  try {
+    const result = await bookingService.retryBookingPaymentSession(
+      req.user._id,
+      req.params.id,
+    );
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }

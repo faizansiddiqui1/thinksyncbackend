@@ -30,6 +30,9 @@ const emailTemplateSchema = new Schema(
       enum: [
         "authentication",
         "booking",
+        "enquiry",
+        "kyc",
+        "notification",
         "review",
         "security",
         "marketing",

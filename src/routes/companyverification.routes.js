@@ -6,6 +6,7 @@ import {
   verifyAadhaarOCRHandler,
   verifyBankSyncHandler,
   getPresignForKycImage,
+  getPresignForKycImageForUser,
   saveKycImage,
   getKycStatus,
   getAdminKycDecision,
@@ -20,12 +21,19 @@ import {
   verifyBankSyncForUser,
   saveKycImageForUser,
 } from "../controllers/admin_controllers/verification.controller.js";
-import { requireAuth } from "../middlewares/auth.js";
+import {
+  requireAdminAccess,
+  requireAuth,
+  requirePermission,
+} from "../middlewares/auth.js";
 
 const router = express.Router();
 
 import multer from "multer";
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // PAN
 router.post("/verification/pan", requireAuth, verifyPanHandler);
@@ -60,33 +68,56 @@ router.get("/kyc/status", requireAuth, getKycStatus);
 router.get("/kyc/admin/status", requireAuth, getAdminKycStatusHandler);
 
 // Admin review routes for target user KYC
+const requireKycReview = [
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("kyc", "review"),
+];
+
 router.get(
   "/admin/users/:userId/kyc/status",
-  requireAuth,
+  ...requireKycReview,
   getUserKycStatusForAdmin,
 );
-router.post("/admin/users/:userId/verification/pan", requireAuth, verifyPanForUser);
+router.post(
+  "/admin/users/:userId/verification/pan",
+  ...requireKycReview,
+  verifyPanForUser,
+);
 router.post(
   "/admin/users/:userId/verification/company-pan",
-  requireAuth,
+  ...requireKycReview,
   verifyCompanyPanForUser,
 );
-router.post("/admin/users/:userId/verification/gst", requireAuth, verifyGstForUser);
-router.post("/admin/users/:userId/verification/cin", requireAuth, verifyCinForUser);
+router.post(
+  "/admin/users/:userId/verification/gst",
+  ...requireKycReview,
+  verifyGstForUser,
+);
+router.post(
+  "/admin/users/:userId/verification/cin",
+  ...requireKycReview,
+  verifyCinForUser,
+);
 router.post(
   "/admin/users/:userId/verification/bank/sync",
-  requireAuth,
+  ...requireKycReview,
   verifyBankSyncForUser,
 );
 router.post(
   "/admin/users/:userId/verification/aadhaar/ocr",
-  requireAuth,
+  ...requireKycReview,
   upload.single("file"),
   verifyAadhaarOCRForUser,
 );
 router.post(
+  "/admin/users/:userId/kyc/presign",
+  ...requireKycReview,
+  getPresignForKycImageForUser,
+);
+router.post(
   "/admin/users/:userId/kyc/save",
-  requireAuth,
+  ...requireKycReview,
   saveKycImageForUser,
 );
 

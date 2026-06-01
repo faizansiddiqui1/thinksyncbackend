@@ -15,6 +15,12 @@ router.post("/verify/confirm-otp", requireAuth, userController.confirmProfileOtp
 
 router.put("/profile", requireAuth, userController.updateProfileHandler);
 
+router.post("/profile/image/presign", requireAuth, userController.createProfileImageUploadHandler);
+
+router.put("/profile/image", requireAuth, userController.saveProfileImageHandler);
+
+router.delete("/profile/image", requireAuth, userController.deleteProfileImageHandler);
+
 router.put("/profile/password", requireAuth, userController.changePasswordHandler);
 
  

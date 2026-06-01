@@ -28,6 +28,11 @@ const KycSchema = new Schema(
     },
 
     aadhaar: {
+      status: {
+        type: String,
+        enum: ["pending", "verified", "rejected"],
+        default: "pending",
+      },
       url: String,
       s3Key: String,
       uploadedAt: Date,
@@ -42,6 +47,11 @@ const KycSchema = new Schema(
       uploadedAt: Date,
     },
     pan: {
+      status: {
+        type: String,
+        enum: ["pending", "verified", "rejected"],
+        default: "pending",
+      },
       url: String,
       s3Key: String,
       uploadedAt: Date,
@@ -92,6 +102,44 @@ const userSchema = new Schema(
       trim: true,
       minlength: [3, "Username must be at least 3 characters long"],
       maxlength: [20, "Username cannot exceed 20 characters"],
+    },
+
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: [70, "Display name cannot exceed 70 characters"],
+      default: "",
+    },
+
+    bio: {
+      type: String,
+      trim: true,
+      maxlength: [240, "Bio cannot exceed 240 characters"],
+      default: "",
+    },
+
+    website: {
+      type: String,
+      trim: true,
+      maxlength: [240, "Website cannot exceed 240 characters"],
+      default: "",
+    },
+
+    profileImage: {
+      url: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+      s3Key: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+      uploadedAt: {
+        type: Date,
+        default: null,
+      },
     },
 
     companyId: {
@@ -199,10 +247,6 @@ userSchema.methods.resetLoginAttempts = function () {
     $unset: { lockUntil: 1 },
   });
 };
-
-userSchema.index({ email: 1 }, { unique: true, sparse: true });
-userSchema.index({ username: 1 }, { unique: true, sparse: true });
-userSchema.index({ phoneNumber: 1 }, { unique: true, sparse: true });
 
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();

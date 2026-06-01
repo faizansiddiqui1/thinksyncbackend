@@ -11,6 +11,7 @@ import {
 } from "../config/s3.js";
 import SeatingOption from "../models/admin_models/SeatingOption.js";
 import Addon from "../models/admin_models/AddonSchema.js";
+import City from "../models/super_admin_models/City.model.js";
 
 const ensureSpaceExists = async (spaceId) => {
   if (!mongoose.Types.ObjectId.isValid(spaceId)) {
@@ -122,6 +123,12 @@ export const getPresignForImage = async (
   }
   if (entity === "kyc" && userId && String(entityId) !== String(userId)) {
     throw new Error("You can upload only your own KYC");
+  }
+  if (
+    entity === "user" &&
+    (!userId || String(entityId) !== String(userId))
+  ) {
+    throw new Error("You can upload only your own profile image");
   }
 
   let ext = "";

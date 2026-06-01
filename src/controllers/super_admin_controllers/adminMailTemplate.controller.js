@@ -4,9 +4,13 @@ import {
   extractTemplateVariables,
   ensureDefaultEmailTemplates,
   getTemplateMetaPayload,
+  SYSTEM_EMAIL_TEMPLATE_DEFINITIONS,
   validateAndNormalizeTemplatePayload,
 } from "../../services/emailTemplateRegistry.service.js";
-import { previewEmailTemplate } from "../../services/mail.service.js";
+import {
+  previewEmailTemplate,
+  sendEmail,
+} from "../../services/mail.service.js";
 
 function normalizePagination(query = {}) {
   const page = Math.max(1, Number(query.page) || 1);
@@ -281,6 +285,92 @@ export async function previewMailTemplate(req, res) {
           ...(req.body?.variables || {}),
         },
       },
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+
+export async function restoreMailTemplateDefault(req, res) {
+  try {
+    const template = await EmailTemplate.findById(req.params.id);
+
+    if (!template || !template.isSystem) {
+      return res.status(404).json({
+        success: false,
+        message: "System email template not found",
+      });
+    }
+
+    const definition = SYSTEM_EMAIL_TEMPLATE_DEFINITIONS.find(
+      (item) => item.name === template.name,
+    );
+
+    if (!definition) {
+      return res.status(400).json({
+        success: false,
+        message: "Default template definition is not registered",
+      });
+    }
+
+    const payload = validateAndNormalizeTemplatePayload(definition);
+
+    Object.assign(template, payload, {
+      isSystem: true,
+      updatedBy: req.user?._id || null,
+    });
+
+    await template.save();
+
+    return res.json({
+      success: true,
+      data: normalizeTemplateDocument(template.toObject()),
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+
+export async function sendTestMailTemplate(req, res) {
+  try {
+    const to = String(req.body?.to || "").trim().toLowerCase();
+    const subject = String(req.body?.subject || "").trim();
+    const html = String(req.body?.html || "");
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid test recipient email is required",
+      });
+    }
+
+    const variablesUsed = extractTemplateVariables(subject, html);
+    const variables = {
+      ...buildSampleVariables(variablesUsed),
+      ...(req.body?.variables || {}),
+    };
+    const rendered = await previewEmailTemplate({
+      subject,
+      html,
+      variables,
+    });
+
+    await sendEmail({
+      to,
+      subject: rendered.subject,
+      html: rendered.html,
+      queue: false,
+    });
+
+    return res.json({
+      success: true,
+      message: `Test email sent to ${to}`,
     });
   } catch (error) {
     return res.status(400).json({

@@ -13,12 +13,27 @@ import {
 import mongoose from "mongoose";
 import * as googleCalendarService from "./googleCalendar.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
+import Resource from "../models/admin_models/ResourceSchema.js";
+import Addon from "../models/admin_models/AddonSchema.js";
 import { validateOfferPreview } from "./offer.service.js"; // make sure path is correct
 import User from "../models/user_models/User.js";
 import {
   attachAccessToBookings,
   ensureBookingAccessCredential,
 } from "./securityAccess/securityAccess.service.js";
+import {
+  sendBookingConfirmationEmail,
+  sendShortTermBookingAccessEmail,
+} from "./mail.service.js";
+
+function dispatchBookingConfirmationEmail(
+  booking,
+  failureMessage = "booking confirmation email failed:",
+) {
+  sendBookingConfirmationEmail({ booking }).catch((error) => {
+    console.error(failureMessage, error.message);
+  });
+}
 
 function withReviewState(booking) {
   const paymentStatus =
@@ -42,19 +57,16 @@ function withReviewState(booking) {
    Create Booking 
 ========================= */
 export const createBooking = async (bookingData, tenantIdOverride = null) => {
+  let durableBooking = null;
   try {
     const {
       space: spaceId,
       bookingDuration,
       plan,
-      quantity,
       resources = [],
       addons = [],
-
-      couponCode: rawCouponCode, // optional
+      couponCode: rawCouponCode,
     } = bookingData;
-
-    const customerPayload = bookingData.customer || bookingData.user || {};
 
     let dbUser = null;
 
@@ -74,29 +86,97 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       return { success: false, error: "Space not found" };
     }
 
-    // frontend final amount (base)
-    const originalAmount = Number(
-      bookingData.totalAmount || bookingData.total || 0,
-    );
+    const startDateTime = bookingData.startDateTime || bookingDuration?.startDate;
+    const endDateTime = bookingData.endDateTime || bookingDuration?.endDate;
+    if (
+      !startDateTime ||
+      !endDateTime ||
+      Number.isNaN(new Date(startDateTime).getTime()) ||
+      Number.isNaN(new Date(endDateTime).getTime()) ||
+      new Date(endDateTime) <= new Date(startDateTime)
+    ) {
+      return { success: false, error: "Valid booking start and end time are required" };
+    }
 
+    const {
+      resources: normalizedResources,
+      addons: normalizedAddons,
+    } = await resolveCheckoutItems({
+      spaceId,
+      bookingType: bookingData.bookingType || plan?.type || "daily",
+      resources,
+      addons,
+    });
+    for (const resource of normalizedResources) {
+      const availability = await Booking.checkAvailability(
+        resource.resourceId,
+        new Date(startDateTime),
+        new Date(endDateTime),
+      );
+      if (!availability.available) {
+        return {
+          success: false,
+          error: `${resource.name || "Selected resource"} is no longer available`,
+        };
+      }
+    }
+
+    const bookingObjectId = new mongoose.Types.ObjectId();
+    const internalBookingId = `booking_${bookingObjectId}`;
+    const finalUser = {
+      userId: dbUser._id,
+      name: dbUser.username,
+      email: dbUser.email,
+      phone: dbUser.phoneNumber,
+    };
+    const normalizedBookingData = {
+      ...bookingData,
+      userId: dbUser._id,
+      user: finalUser,
+      resources: normalizedResources,
+      addons: normalizedAddons,
+      startDateTime,
+      endDateTime,
+    };
+
+    const booking = await Booking.create({
+      _id: bookingObjectId,
+      bookingId: internalBookingId,
+      user: finalUser,
+      space: spaceId,
+      spaceType: bookingData.spaceType || space.spaceType || "",
+      resources: normalizedResources,
+      addons: normalizedAddons,
+      plan: {
+        planId: plan?.planId || null,
+        type: plan?.type || bookingData.bookingType || "daily",
+      },
+      bookingType: bookingData.bookingType || plan?.type || "daily",
+      bookingDuration: {
+        ...bookingDuration,
+        startDate: startDateTime,
+        endDate: endDateTime,
+      },
+      startDateTime,
+      endDateTime,
+      timezone: bookingData.timezone || "Asia/Kolkata",
+      specialRequests: bookingData.specialRequests || "",
+      status: "draft",
+      payment: {
+        method: bookingData?.payment?.method || "upi",
+        status: "pending",
+      },
+    });
+
+    durableBooking = booking;
+    const originalAmount = Number(booking.priceBreakdown?.totalAmount || 0);
     if (originalAmount <= 0) {
-      return {
-        success: false,
-        error: "Total amount missing or invalid from frontend",
-      };
+      booking.status = "expired";
+      booking.holdExpiresAt = null;
+      await booking.save();
+      return { success: false, error: "Unable to calculate booking amount" };
     }
 
-    // tenant + gateway resolution
-    const tenantId = tenantIdOverride || (await getTenantIdFromSpace(spaceId));
-    const gatewayResolved = await resolveGateway(tenantId);
-    if (!gatewayResolved || !gatewayResolved.gateway) {
-      return { success: false, error: "Payment gateway not configured" };
-    }
-
-    // prepare internal id
-    const internalBookingId = `booking_${new mongoose.Types.ObjectId()}`;
-
-    // OFFER VALIDATION (server-side final)
     let couponCode = rawCouponCode
       ? String(rawCouponCode).toUpperCase().trim()
       : null;
@@ -109,12 +189,10 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
         const offerResult = await validateOfferPreview({
           spaceId,
           code: couponCode,
-          userId: bookingData.user?.userId || bookingData.userId || null,
+          userId: dbUser._id,
           planType: plan?.type || plan?.pricingType || null,
           bookingAmount: originalAmount,
         });
-
-        console.log("Offer result", offerResult);
 
         // validateOfferPreview returns discountAmount and finalAmount
         discountAmount = Number(offerResult.discountAmount || 0);
@@ -122,115 +200,37 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
         appliedOffer = offerResult.offer || null;
       } catch (err) {
         // Offer invalid — surface an error so frontend can show message
+        booking.status = "expired";
+        booking.holdExpiresAt = null;
+        await booking.save();
         return { success: false, error: `Offer invalid: ${err.message}` };
       }
     }
 
-    // finalAmount must be > 0 (you can allow 0 if you support free bookings)
     if (finalAmount < 0) finalAmount = 0;
-
-    // create gateway order (use finalAmount)
-    const gatewayName = gatewayResolved.gateway;
-    let gatewayOrderId = null;
-    let normalizedPaymentData = null;
-
-    if (gatewayName === "cashfree") {
-      const cfResp = await cashfreeService.createCashfreeOrder({
-        credentials: gatewayResolved.credentials,
-        orderId: internalBookingId, // pass internal id if you want mapping
-        amount: finalAmount,
-        currency: "INR",
-
-        customer: {
-          name: dbUser.username,
-          email: dbUser.email,
-          phone: dbUser.phoneNumber,
-        },
-      });
-
-      // normalize response (adapt if your cashfreeService shape differs)
-      gatewayOrderId =
-        cfResp?.order_id || cfResp?.data?.order_id || internalBookingId;
-
-      console.log("CF RESPONSE:", cfResp);
-
-      normalizedPaymentData = {
-        orderId:
-          cfResp?.order_id || cfResp?.data?.order_id || internalBookingId,
-
-        payment_session_id:
-          cfResp?.payment_session_id || cfResp?.data?.payment_session_id,
-
-        raw: cfResp,
-      };
-      if (!normalizedPaymentData.payment_session_id) {
-        throw new Error("Cashfree payment_session_id missing");
-      }
-    } else if (gatewayName === "razorpay") {
-      const instance = await razorpayService.createRazorpayInstance(
-        gatewayResolved.credentials,
-      );
-
-      // NOTE: razorpay usually expects amount in paise (depends on helper). Keep same semantics as your existing razorpayService
-      const razorpayOrder = await razorpayService.createRazorpayOrder({
-        instance,
-        amount: finalAmount,
-        currency: "INR",
-        receipt: internalBookingId,
-      });
-
-      if (!razorpayOrder || !razorpayOrder.id) {
-        return { success: false, error: "Failed to create Razorpay order" };
-      }
-
-      gatewayOrderId = razorpayOrder.id;
-
-      normalizedPaymentData = {
-        orderId: gatewayOrderId,
-        payment_session_id: gatewayOrderId,
-        key: gatewayResolved.credentials.keyId,
-        raw: razorpayOrder,
-      };
-    } else {
-      return { success: false, error: "Unsupported gateway" };
-    }
-
-    if (!gatewayOrderId || !normalizedPaymentData) {
-      return { success: false, error: "Failed to initialize payment" };
-    }
-
-    const finalUser = {
-      userId: dbUser._id,
-      name: dbUser.username,
-      email: dbUser.email,
-      phone: dbUser.phoneNumber,
-    };
-
-    bookingData.user = finalUser;
-
-    const tempPayload = {
-      orderId: gatewayOrderId,
-      internalBookingId,
-      bookingData,
-      originalAmount,
-      totalAmount: finalAmount,
+    booking.priceBreakdown.discount = discountAmount;
+    booking.priceBreakdown.totalAmount = finalAmount;
+    booking.coupon = {
+      code: couponCode || "",
+      offerId: appliedOffer?.id || null,
       discountAmount,
-      couponCode: couponCode || null,
-      offerId: appliedOffer ? appliedOffer.id : null,
-      gateway: gatewayName,
-      createdAt: new Date(),
     };
+    await booking.save();
 
-    await TempBooking.create(tempPayload);
-
-    console.log("👉 SESSION:", normalizedPaymentData.payment_session_id);
+    const paymentSession = await initializeBookingPaymentSession({
+      booking,
+      bookingData: normalizedBookingData,
+      tenantIdOverride,
+    });
 
     return {
       success: true,
       data: {
-        orderId: gatewayOrderId,
-        payment: normalizedPaymentData,
-        gateway: gatewayName,
+        bookingId: booking._id,
+        bookingReference: booking.bookingId,
+        orderId: paymentSession.orderId,
+        payment: paymentSession.payment,
+        gateway: paymentSession.gateway,
         internalBookingId,
         originalAmount,
         finalAmount,
@@ -241,7 +241,17 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     };
   } catch (error) {
     console.error("createBooking error:", error);
-    return { success: false, error: error.message || String(error) };
+    return {
+      success: false,
+      error: error.message || String(error),
+      data: durableBooking
+        ? {
+            bookingId: durableBooking._id,
+            bookingReference: durableBooking.bookingId,
+            canRetry: true,
+          }
+        : undefined,
+    };
   }
 };
 
@@ -264,11 +274,305 @@ function normalizeBookingResources(resources = []) {
     .filter(Boolean);
 }
 
+function normalizeBookingAddons(addons = []) {
+  if (!Array.isArray(addons)) return [];
+
+  return addons
+    .map((addon) => {
+      const addonId = addon?.addonId || addon?._id || addon?.id;
+      if (!addonId) return null;
+
+      return {
+        addonId,
+        name: addon?.name || addon?.title || "",
+        type: addon?.type || "",
+        quantity: Number(addon?.quantity || addon?.qty || 1) || 1,
+        unitPrice: Number(addon?.unitPrice || addon?.price || 0) || 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function resolveCheckoutItems({
+  spaceId,
+  bookingType,
+  resources = [],
+  addons = [],
+}) {
+  const requestedResources = normalizeBookingResources(resources);
+  const requestedAddons = normalizeBookingAddons(addons);
+  const [catalogResources, catalogAddons] = await Promise.all([
+    Resource.find({
+      _id: { $in: requestedResources.map((item) => item.resourceId) },
+      space: spaceId,
+      isActive: true,
+    }).lean(),
+    Addon.find({
+      _id: { $in: requestedAddons.map((item) => item.addonId) },
+      space: spaceId,
+      isActive: true,
+    }).lean(),
+  ]);
+  const resourceMap = new Map(
+    catalogResources.map((item) => [String(item._id), item]),
+  );
+  const addonMap = new Map(
+    catalogAddons.map((item) => [String(item._id), item]),
+  );
+
+  const verifiedResources = requestedResources.map((requested) => {
+    const resource = resourceMap.get(String(requested.resourceId));
+    if (!resource) throw new Error("Selected resource is unavailable");
+    const unitPrice = Number(resource.prices?.[bookingType]);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw new Error(`${resource.name} does not support ${bookingType} booking`);
+    }
+    return {
+      resourceId: resource._id,
+      name: resource.name,
+      type: resource.type,
+      quantity: requested.quantity,
+      unitPrice,
+    };
+  });
+
+  const verifiedAddons = requestedAddons.map((requested) => {
+    const addon = addonMap.get(String(requested.addonId));
+    if (!addon) throw new Error("Selected add-on is unavailable");
+    return {
+      addonId: addon._id,
+      name: addon.title,
+      type: addon.type,
+      quantity: requested.quantity,
+      unitPrice: Number(addon.price || 0),
+    };
+  });
+
+  return { resources: verifiedResources, addons: verifiedAddons };
+}
+
 function getInternalPlanType(bookingType = "daily") {
   const normalized = String(bookingType || "daily").toLowerCase();
   if (normalized === "hourly") return "hourly";
   if (normalized === "monthly") return "monthly";
   return "daily";
+}
+
+function getBookingSnapshot(booking) {
+  return {
+    userId: booking.user?.userId,
+    user: booking.user,
+    space: booking.space,
+    spaceType: booking.spaceType,
+    resources: booking.resources,
+    addons: booking.addons,
+    plan: booking.plan,
+    bookingType: booking.bookingType,
+    bookingDuration: booking.bookingDuration,
+    startDateTime: booking.startDateTime,
+    endDateTime: booking.endDateTime,
+    timezone: booking.timezone,
+    specialRequests: booking.specialRequests,
+    payment: { method: booking.payment?.method || "upi" },
+    totalAmount: booking.priceBreakdown?.totalAmount || 0,
+  };
+}
+
+async function initializeBookingPaymentSession({
+  booking,
+  bookingData = null,
+  tenantIdOverride = null,
+}) {
+  const tenantId = tenantIdOverride || (await getTenantIdFromSpace(booking.space));
+  const gatewayResolved = await resolveGateway(tenantId);
+  if (!gatewayResolved?.gateway) {
+    throw new Error("Payment gateway not configured");
+  }
+
+  const amount = Number(booking.priceBreakdown?.totalAmount || 0);
+  if (amount <= 0) throw new Error("Booking amount must be greater than zero");
+
+  const gateway = gatewayResolved.gateway;
+  const orderId = `${booking.bookingId}_${new mongoose.Types.ObjectId().toString().slice(-8)}`;
+  let payment = null;
+
+  if (gateway === "cashfree") {
+    const response = await cashfreeService.createCashfreeOrder({
+      credentials: gatewayResolved.credentials,
+      orderId,
+      amount,
+      currency: "INR",
+      customer: {
+        name: booking.user?.name,
+        email: booking.user?.email,
+        phone: booking.user?.phone,
+      },
+    });
+    payment = {
+      orderId,
+      payment_session_id: response?.payment_session_id,
+      raw: response,
+    };
+    if (!payment.payment_session_id) {
+      throw new Error("Cashfree payment_session_id missing");
+    }
+  } else if (gateway === "razorpay") {
+    const instance = await razorpayService.createRazorpayInstance(
+      gatewayResolved.credentials,
+    );
+    const response = await razorpayService.createRazorpayOrder({
+      instance,
+      amount,
+      currency: "INR",
+      receipt: booking.bookingId,
+    });
+    if (!response?.id) throw new Error("Failed to create Razorpay order");
+    payment = {
+      orderId: response.id,
+      payment_session_id: response.id,
+      key: gatewayResolved.credentials.keyId,
+      raw: response,
+    };
+  } else {
+    throw new Error("Unsupported gateway");
+  }
+
+  const gatewayOrderId = payment.orderId;
+  booking.status = "pending_payment";
+  booking.holdExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  booking.payment = {
+    ...booking.payment.toObject?.(),
+    method: booking.payment?.method || "upi",
+    status: "pending",
+    gateway,
+    reference: gatewayOrderId,
+    paymentSessionId: payment.payment_session_id,
+    attempts: [
+      ...(booking.payment?.attempts || []),
+      {
+        orderId: gatewayOrderId,
+        sessionId: payment.payment_session_id,
+        gateway,
+        status: "created",
+      },
+    ],
+  };
+  await booking.save();
+
+  await TempBooking.create({
+    orderId: gatewayOrderId,
+    bookingId: booking._id,
+    gateway,
+    internalBookingId: booking.bookingId,
+    bookingData: bookingData || getBookingSnapshot(booking),
+    originalAmount:
+      Number(booking.priceBreakdown?.basePrice || 0) +
+      Number(booking.priceBreakdown?.gstAmount || 0),
+    totalAmount: amount,
+    discountAmount: Number(booking.priceBreakdown?.discount || 0),
+    couponCode: booking.coupon?.code || null,
+    offerId: booking.coupon?.offerId || null,
+  });
+
+  return { gateway, orderId: gatewayOrderId, payment };
+}
+
+export async function getCheckoutBooking(userId, bookingId) {
+  try {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      "user.userId": userId,
+    })
+      .populate("space", "name slug spaceType")
+      .lean();
+    if (!booking) return { success: false, error: "Booking not found" };
+
+    return {
+      success: true,
+      data: {
+        booking,
+        canRetry: ["draft", "pending_payment", "payment_processing"].includes(
+          booking.status,
+        ),
+      },
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function retryBookingPaymentSession(userId, bookingId) {
+  try {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      "user.userId": userId,
+    });
+    if (!booking) return { success: false, error: "Booking not found" };
+    if (booking.payment?.status === "paid" || booking.status === "confirmed") {
+      return { success: false, error: "Booking is already confirmed" };
+    }
+    if (["cancelled", "expired", "refunded", "completed"].includes(booking.status)) {
+      return { success: false, error: `Payment cannot be retried for ${booking.status} booking` };
+    }
+    if (new Date(booking.endDateTime) <= new Date()) {
+      booking.status = "expired";
+      booking.holdExpiresAt = null;
+      await booking.save();
+      return { success: false, error: "This booking window has expired" };
+    }
+    for (const resource of booking.resources || []) {
+      const availability = await Booking.checkAvailability(
+        resource.resourceId,
+        booking.startDateTime,
+        booking.endDateTime,
+        booking._id,
+      );
+      if (!availability.available) {
+        booking.status = "expired";
+        booking.holdExpiresAt = null;
+        await booking.save();
+        return { success: false, error: `${resource.name || "Selected resource"} is no longer available` };
+      }
+    }
+
+    const paymentSession = await initializeBookingPaymentSession({ booking });
+    return {
+      success: true,
+      data: {
+        bookingId: booking._id,
+        bookingReference: booking.bookingId,
+        gateway: paymentSession.gateway,
+        orderId: paymentSession.orderId,
+        payment: paymentSession.payment,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: error.message || String(error) };
+  }
+}
+
+export async function markBookingPaymentAttemptFailed(orderId, reason = "") {
+  if (!orderId) return null;
+  const booking = await Booking.findOne({
+    $or: [
+      { "payment.reference": orderId },
+      { "payment.attempts.orderId": orderId },
+    ],
+  });
+  if (!booking || booking.payment?.status === "paid") return booking;
+
+  const attempt = booking.payment?.attempts?.find((item) => item.orderId === orderId);
+  if (attempt) {
+    attempt.status = "failed";
+    attempt.failureReason = reason;
+    attempt.updatedAt = new Date();
+  }
+  if (booking.payment?.reference === orderId) {
+    booking.status = "pending_payment";
+    booking.payment.status = "failed";
+  }
+  await booking.save();
+  return booking;
 }
 
 export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
@@ -420,6 +724,11 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       holdExpiresAt: null,
     });
 
+    dispatchBookingConfirmationEmail(
+      booking,
+      "internal booking confirmation email failed:",
+    );
+
     // create calendar event for internal bookings if user has connected google
     try {
       const userId = authUser._id;
@@ -430,10 +739,24 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       console.error("google calendar create failed for internal booking:", err?.message || err);
     }
 
+    let bookingAccess = null;
+
     try {
-      await ensureBookingAccessCredential(booking);
+      bookingAccess = await ensureBookingAccessCredential(booking);
     } catch (err) {
       console.error("internal booking access credential failed:", err?.message || err);
+    }
+
+    if (bookingAccess) {
+      sendShortTermBookingAccessEmail({
+        booking,
+        access: bookingAccess,
+      }).catch((error) => {
+        console.error(
+          "internal short-term booking access email failed:",
+          error.message,
+        );
+      });
     }
 
     return {
@@ -1149,6 +1472,9 @@ export const updatePaymentStatus = async (id, paymentData) => {
       return { success: false, error: "Booking not found" };
     }
 
+    const wasPaid =
+      booking.paymentStatus === "paid" || booking.payment?.status === "paid";
+
     booking.payment = {
       ...booking.payment,
       ...paymentData,
@@ -1163,6 +1489,11 @@ export const updatePaymentStatus = async (id, paymentData) => {
     }
 
     await booking.save();
+
+    if (!wasPaid && paymentData.status === "paid") {
+      dispatchBookingConfirmationEmail(booking);
+    }
+
     // ensure calendar event exists or updated when payment becomes paid/confirmed
     try {
       const userId = booking.user?.userId || null;

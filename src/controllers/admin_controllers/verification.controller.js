@@ -759,9 +759,9 @@ export async function verifyAadhaarOCRHandler(req, res, next) {
         mimetype: file.mimetype,
       };
 
-      ({ raw, verified } = await svc.verifyAadhaarOCR(input, { tenant }));
+      ({ raw, verified } = await svc.verifyAadhaarOCR({ tenant, input }));
     } else {
-      ({ raw, verified } = await svc.verifyAadhaarOCR(fileUrl, { tenant }));
+      ({ raw, verified } = await svc.verifyAadhaarOCR({ tenant, input: fileUrl }));
     }
 
     ensureField(v, "aadhaar");
@@ -804,9 +804,9 @@ export async function verifyAadhaarOCRForUser(req, res, next) {
         mimetype: file.mimetype,
       };
 
-      ({ raw, verified } = await svc.verifyAadhaarOCR(input, { tenant }));
+      ({ raw, verified } = await svc.verifyAadhaarOCR({ tenant, input }));
     } else {
-      ({ raw, verified } = await svc.verifyAadhaarOCR(fileUrl, { tenant }));
+      ({ raw, verified } = await svc.verifyAadhaarOCR({ tenant, input: fileUrl }));
     }
 
     ensureField(v, "aadhaar");
@@ -936,7 +936,20 @@ export async function verifyBankSyncForUser(req, res, next) {
 
 export const getPresignForKycImage = async (req, res) => {
   try {
-    const data = await svc.getPresignForKycImage(req.user._id, req.body);
+    const tenant = getTenant(req);
+    const data = await svc.getPresignForKycImage(req.user._id, req.body, tenant);
+
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+};
+
+export const getPresignForKycImageForUser = async (req, res) => {
+  try {
+    const userId = ensureTargetUserId(req);
+    const tenant = getTenant(req);
+    const data = await svc.getPresignForKycImage(userId, req.body, tenant);
 
     res.json({ success: true, data });
   } catch (e) {

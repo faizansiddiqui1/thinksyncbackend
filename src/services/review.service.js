@@ -442,7 +442,10 @@ export async function getSpaceReviews(spaceId, filters = {}) {
       sortBy = "createdAt",
     } = filters;
 
-    const query = { space: spaceId, isPublished: true };
+    const normalizedSpaceId = mongoose.Types.ObjectId.isValid(String(spaceId))
+      ? new mongoose.Types.ObjectId(String(spaceId))
+      : spaceId;
+    const query = { space: normalizedSpaceId, isPublished: true };
 
     if (rating) query.rating = rating;
     if (verifiedOnly) query.verifiedBooking = true;
@@ -462,7 +465,7 @@ export async function getSpaceReviews(spaceId, filters = {}) {
     const total = await Review.countDocuments(query);
 
     const ratingDistribution = await Review.aggregate([
-      { $match: { space: spaceId, isPublished: true } },
+      { $match: { space: normalizedSpaceId, isPublished: true } },
       {
         $group: {
           _id: "$rating",

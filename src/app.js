@@ -56,7 +56,6 @@ import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
 const app = express();
-connectDB();
 
 /* -------------------------
    Security & CORS
@@ -210,26 +209,28 @@ if (process.env.NODE_ENV === "production") {
 
 const PORT = parseInt(process.env.PORT, 10) || 5000;
 
-ensureDefaultEmailTemplates()
-  .then(() => {
-    startBookingCompletionCron();
-  })
-  .catch((error) => {
-    console.error("email template init failed:", error.message);
-    startBookingCompletionCron();
+async function startServer() {
+  await connectDB();
+  await ensureDefaultEmailTemplates();
+  startBookingCompletionCron();
+
+  const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`NODE_ENV: ${process.env.NODE_ENV || "development"}`);
   });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`NODE_ENV: ${process.env.NODE_ENV || "development"}`);
-});
-
-server.on("error", (error) => {
-  if (error.code === "EADDRINUSE") {
-    console.error(`Port ${PORT} is already in use. Please stop the running process or set a different PORT.`);
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`Port ${PORT} is already in use. Please stop the running process or set a different PORT.`);
+      process.exit(1);
+    }
+    console.error("Server error:", error);
     process.exit(1);
-  }
-  console.error("Server error:", error);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("Server startup failed:", error.message);
   process.exit(1);
 });
 

@@ -3,8 +3,10 @@ import mongoose from "mongoose";
 import Space from "../models/admin_models/Space.js";
 import City from "../models/super_admin_models/City.model.js";
 import Consultant from "../models/super_admin_models/Consultant.js";
+import { createSignedGetUrl } from "../config/s3.js";
 
 const WILDCARD_VALUES = new Set(["all", "*", "any", "default"]);
+const CONSULTANT_IMAGE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function normalizeKey(value) {
   return String(value || "")
@@ -200,13 +202,25 @@ export function maskEmail(email = "") {
   return `${visible}${"*".repeat(Math.max(3, name.length - visible.length))}@${domain}`;
 }
 
-export function serializeConsultant(consultant, { publicView = true, match = null } = {}) {
-  if (!consultant) return null;
-
-  const imageUrl =
+async function resolveConsultantImageUrl(consultant = {}) {
+  const key = consultant.profileImage?.key || "";
+  const fallbackUrl =
     consultant.profileImage?.url ||
     consultant.profileImageUrl ||
     "";
+
+  if (!key) return fallbackUrl;
+
+  return createSignedGetUrl({
+    key,
+    expiresSeconds: CONSULTANT_IMAGE_URL_TTL_SECONDS,
+  }).catch(() => fallbackUrl);
+}
+
+export async function serializeConsultant(consultant, { publicView = true, match = null } = {}) {
+  if (!consultant) return null;
+
+  const imageUrl = await resolveConsultantImageUrl(consultant);
 
   const base = {
     _id: consultant._id,
@@ -239,7 +253,10 @@ export function serializeConsultant(consultant, { publicView = true, match = nul
     ...base,
     phone: consultant.phone,
     email: consultant.email,
-    profileImage: consultant.profileImage || {},
+    profileImage: {
+      ...(consultant.profileImage || {}),
+      url: imageUrl,
+    },
     assignedCities: consultant.assignedCities || [],
     assignedProductTypes: consultant.assignedProductTypes || [],
     assignedSpaceTypes: consultant.assignedSpaceTypes || [],
@@ -284,7 +301,7 @@ export async function findMatchingConsultant(input = {}, options = {}) {
   }
 
   return {
-    consultant: serializeConsultant(best, {
+    consultant: await serializeConsultant(best, {
       publicView: options.publicView !== false,
       match: bestMatch,
     }),

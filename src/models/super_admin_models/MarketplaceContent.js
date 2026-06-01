@@ -108,6 +108,10 @@ const marketplaceContentSchema = new Schema(
 
 marketplaceContentSchema.index({ type: 1, slug: 1 }, { unique: true });
 marketplaceContentSchema.index({ type: 1, isActive: 1, priority: 1 });
+marketplaceContentSchema.index(
+  { type: 1, code: 1 },
+  { unique: true, partialFilterExpression: { type: "offers", code: { $gt: "" } } },
+);
 
 function slugify(value = "") {
   return String(value || "")

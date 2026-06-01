@@ -77,7 +77,7 @@ const reviewSchema = new Schema(
 
     comment: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
       maxlength: 1500,
     },

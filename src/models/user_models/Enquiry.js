@@ -207,7 +207,15 @@ const enquirySchema = new Schema(
 
     leadSource: {
       type: String,
-      enum: ["website", "whatsapp", "call", "manual", "ads", "other"],
+      enum: [
+        "website",
+        "landing_request_callback",
+        "whatsapp",
+        "call",
+        "manual",
+        "ads",
+        "other",
+      ],
       default: "website",
       index: true,
     },

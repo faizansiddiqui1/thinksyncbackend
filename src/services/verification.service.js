@@ -68,7 +68,7 @@ function isVerified(raw) {
 }
 
 // Download file from S3 using tenant-aware client
-async function getBufferFromS3(key, tenant) {
+async function getFileFromS3(key, tenant) {
   const aws = await resolveAwsConfig(tenant);
   const client = getS3Client(aws);
 
@@ -89,31 +89,44 @@ async function getBufferFromS3(key, tenant) {
     chunks.push(chunk);
   }
 
-  return Buffer.concat(chunks);
+  return {
+    buffer: Buffer.concat(chunks),
+    contentType: obj.ContentType || mime.lookup(key) || "application/octet-stream",
+    filename: key.split("/").pop() || "document",
+  };
 }
 
-// FINAL KYC DECISION
-export async function getFinalKycStatus(user) {
-  const requireFace = await isFaceMatchRequired();
+async function getBufferFromS3(key, tenant) {
+  const file = await getFileFromS3(key, tenant);
+  return file.buffer;
+}
 
+function isPanDocumentVerified(pan) {
+  return Boolean(
+    pan?.status === "verified" ||
+      pan?.data?.valid === true ||
+      String(pan?.data?.pan_status || "").toUpperCase() === "VALID",
+  );
+}
+
+// User KYC approval requires Aadhaar and PAN. Face matching is an optional
+// workflow step and is evaluated separately where it is explicitly enabled.
+export async function getFinalKycStatus(user) {
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const panOk = user?.kyc?.pan?.status === "verified";
-  const faceOk = user?.kyc?.faceMatch?.matched === true;
+  const panOk = isPanDocumentVerified(user?.kyc?.pan);
 
   if (!aadhaarOk && !panOk) return "not_submitted";
   if (!aadhaarOk || !panOk) return "pending";
-  if (requireFace && !faceOk) return "pending";
 
   return "approved";
 }
 
 export function getUserKycDecision(user) {
   const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const panOk = user?.kyc?.pan?.status === "verified";
+  const panOk = isPanDocumentVerified(user?.kyc?.pan);
 
   if (!user?.kyc?.aadhaar) return "not_submitted";
-  if (!aadhaarOk) return "pending";
-  if (!panOk) return "pending";
+  if (!aadhaarOk || !panOk) return "pending";
 
   return "approved";
 }
@@ -133,8 +146,20 @@ export async function buildUserKycPayload(userId) {
   const aadhaarVerified = user?.kyc?.aadhaar?.ocr?.verified === true;
 
   const panVerified =
-    (cv?.pan && cv.pan.status === "verified") ||
-    (user?.kyc?.pan && user.kyc.pan.status === "verified");
+    isPanDocumentVerified(cv?.pan) || isPanDocumentVerified(user?.kyc?.pan);
+
+  const persistedUserStatus =
+    aadhaarVerified && panVerified ? "approved" : aadhaarVerified || panVerified ? "pending" : "not_submitted";
+  const repair = {};
+  if (panVerified && user?.kyc?.pan?.status !== "verified") {
+    repair["kyc.pan.status"] = "verified";
+  }
+  if (user?.kyc?.status !== persistedUserStatus) {
+    repair["kyc.status"] = persistedUserStatus;
+  }
+  if (Object.keys(repair).length) {
+    await User.updateOne({ _id: userId }, { $set: repair });
+  }
 
   const faceVerified =
     !requireFaceMatch || user?.kyc?.faceMatch?.matched === true;
@@ -262,6 +287,54 @@ export async function verifyBankSync({ tenant, account, ifsc }) {
   }
 }
 
+const KYC_UPLOAD_RULES = {
+  aadhaar: {
+    extensions: new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf"]),
+    contentTypes: new Set([
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "application/pdf",
+    ]),
+  },
+  selfie: {
+    extensions: new Set([".jpg", ".jpeg", ".png", ".webp"]),
+    contentTypes: new Set(["image/jpeg", "image/png", "image/webp"]),
+  },
+  pan: {
+    extensions: new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf"]),
+    contentTypes: new Set([
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "application/pdf",
+    ]),
+  },
+};
+const MAX_KYC_FILE_BYTES = 10 * 1024 * 1024;
+
+export function validateKycUpload({ filename, contentType, size, type }) {
+  const rule = KYC_UPLOAD_RULES[type];
+  if (!rule) throw new Error("Invalid image type");
+
+  const normalizedType = String(contentType || "").toLowerCase();
+  const extension = String(filename || "")
+    .slice(String(filename || "").lastIndexOf("."))
+    .toLowerCase();
+
+  if (!rule.contentTypes.has(normalizedType) || !rule.extensions.has(extension)) {
+    throw new Error(
+      type === "aadhaar"
+        ? "Aadhaar document must be JPG, JPEG, PNG, WEBP, or PDF"
+        : "Document format is not supported",
+    );
+  }
+
+  if (Number(size || 0) > MAX_KYC_FILE_BYTES) {
+    throw new Error("KYC document must be 10 MB or smaller");
+  }
+}
+
 // Aadhaar OCR
 export async function verifyAadhaarOCR({ tenant, input, opts = {} }) {
   const payload = {
@@ -279,6 +352,15 @@ export async function verifyAadhaarOCR({ tenant, input, opts = {} }) {
   }
 
   // multer memoryStorage provides req.file.buffer
+  if (input?.originalname && input?.mimetype) {
+    validateKycUpload({
+      filename: input.originalname,
+      contentType: input.mimetype,
+      size: input.size || input.buffer?.length,
+      type: "aadhaar",
+    });
+  }
+
   const hasBufferProp = input && input.buffer;
   const isBufferDirect = Buffer.isBuffer(input);
 
@@ -329,9 +411,7 @@ export const getPresignForKycImage = async (userId, body, tenant) => {
     throw new Error("filename, contentType and type required");
   }
 
-  if (!["aadhaar", "selfie", "pan"].includes(type)) {
-    throw new Error("Invalid image type");
-  }
+  validateKycUpload({ filename, contentType, type });
 
   const ext = filename.includes(".")
     ? filename.substring(filename.lastIndexOf("."))
@@ -446,11 +526,16 @@ export const saveKycImage = async (userId, body, tenant) => {
     try {
       console.log("Running Aadhar OCR...");
 
-      const buffer = await getBufferFromS3(key, tenant);
+      const file = await getFileFromS3(key, tenant);
 
       const { raw: ocrRaw, verified } = await verifyAadhaarOCR({
         tenant,
-        input: buffer,
+        input: {
+          buffer: file.buffer,
+          originalname: file.filename,
+          mimetype: file.contentType,
+          size: file.buffer.length,
+        },
       });
 
       user.kyc.aadhaar.ocr = {

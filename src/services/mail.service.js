@@ -73,6 +73,68 @@ function formatDateOnly(value, timeZone = "Asia/Kolkata") {
   }).format(date);
 }
 
+function formatTimeOnly(value, timeZone = "Asia/Kolkata") {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatBookingDuration(booking = {}) {
+  const start = new Date(
+    booking.startDateTime || booking.bookingDuration?.startDate || "",
+  );
+  const end = new Date(
+    booking.endDateTime || booking.bookingDuration?.endDate || "",
+  );
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return "";
+  }
+
+  const minutes = Math.max(0, Math.round((end - start) / (60 * 1000)));
+  if (minutes >= 24 * 60 && minutes % (24 * 60) === 0) {
+    const days = minutes / (24 * 60);
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+
+  return `${minutes} minutes`;
+}
+
+function formatWorkspaceAddress(space = {}) {
+  const address = space.address || {};
+  const city =
+    address.city?.name ||
+    address.city?.label ||
+    address.city ||
+    space.location?.cityName ||
+    space.location?.city ||
+    "";
+
+  return [
+    address.line1,
+    address.line2,
+    address.street,
+    address.locality,
+    city,
+    address.state,
+    address.pincode || address.postalCode,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 async function getTransporter(tenant) {
   const smtp = await getActiveSMTP(tenant);
   const cacheKey = [
@@ -232,16 +294,22 @@ async function resolveSpaceForBooking(booking) {
   }
 
   return Space.findById(booking.space)
-    .select("name owner spaceType address.timezone")
+    .select("name owner spaceType listingModes address location")
     .lean();
 }
 
-async function buildBookingMailContext(booking) {
+async function buildBookingMailContext(
+  booking,
+  { access: suppliedAccess = null, includeAccess = false } = {},
+) {
   const space = await resolveSpaceForBooking(booking);
   const timeZone =
     booking?.timezone || space?.address?.timezone || "Asia/Kolkata";
   const baseUrl = getAppBaseUrl();
-  const access = await ensureBookingAccessCredential(booking).catch(() => null);
+  const access = includeAccess
+    ? suppliedAccess ||
+      (await ensureBookingAccessCredential(booking).catch(() => null))
+    : null;
   const accessLocation =
     access?.entryPermissions?.join(", ") ||
     access?.locations
@@ -271,6 +339,9 @@ async function buildBookingMailContext(booking) {
       booking?.spaceType ||
       space?.spaceType ||
       "workspace",
+    isShortTermBooking: space?.listingModes?.shortTerm !== false,
+    workspaceAddress:
+      formatWorkspaceAddress(space) || space?.name || "Assigned workspace",
     bookingId: booking?._id ? String(booking._id) : "",
     bookingDate: formatDateOnly(
       booking?.startDateTime || booking?.bookingDuration?.startDate,
@@ -284,6 +355,15 @@ async function buildBookingMailContext(booking) {
       booking?.endDateTime || booking?.bookingDuration?.endDate,
       timeZone,
     ),
+    startTime: formatTimeOnly(
+      booking?.startDateTime || booking?.bookingDuration?.startDate,
+      timeZone,
+    ),
+    endTime: formatTimeOnly(
+      booking?.endDateTime || booking?.bookingDuration?.endDate,
+      timeZone,
+    ),
+    duration: formatBookingDuration(booking),
     paymentAmount: formatCurrencyInr(
       booking?.priceBreakdown?.totalAmount,
     ),
@@ -296,7 +376,7 @@ async function buildBookingMailContext(booking) {
         ? "Show this QR or access code at the assigned entry during your active booking window. The same pass stays linked to your booking until it expires."
         : "Your booking access status will update automatically in your dashboard if the booking changes.",
     reviewLink: `${baseUrl}/bookings/${booking?._id}/review`,
-    manageBookingLink: `${baseUrl}/bookings/${booking?._id}`,
+    manageBookingLink: `${baseUrl}/dashboard/bookings?booking=${booking?._id}`,
     platformName: getPlatformName(),
     supportEmail: getSupportEmail(),
     year: getCurrentYear(),
@@ -325,7 +405,46 @@ export async function sendBookingConfirmationEmail({
   const context = await buildBookingMailContext(booking);
 
   return sendTemplatedEmail({
-    templateName: "booking_confirmation",
+    templateName: "booking_confirmed",
+    tenant: context.tenant,
+    to: booking.user.email,
+    variables: buildBaseVariables(context),
+    queue,
+  });
+}
+
+export async function sendShortTermBookingAccessEmail({
+  booking,
+  access = null,
+  queue = true,
+}) {
+  if (!booking?.user?.email) {
+    throw new Error("Booking access email recipient missing");
+  }
+
+  const context = await buildBookingMailContext(booking, {
+    access,
+    includeAccess: true,
+  });
+
+  if (!context.isShortTermBooking) {
+    return {
+      success: true,
+      skipped: true,
+      reason: "not_a_short_term_booking",
+    };
+  }
+
+  if (!context.accessQrImage || !context.accessCode) {
+    return {
+      success: true,
+      skipped: true,
+      reason: "booking_access_not_available",
+    };
+  }
+
+  return sendTemplatedEmail({
+    templateName: "short_term_booking_access",
     tenant: context.tenant,
     to: booking.user.email,
     variables: buildBaseVariables(context),
@@ -337,6 +456,7 @@ export async function sendReviewEmail({
   booking,
   queue = true,
   force = false,
+  templateName = "booking_completed_review_request",
 }) {
   const paymentStatus =
     booking?.paymentStatus || booking?.payment?.status || "pending";
@@ -364,10 +484,82 @@ export async function sendReviewEmail({
   const context = await buildBookingMailContext(booking);
 
   return sendTemplatedEmail({
-    templateName: "booking_review",
+    templateName,
     tenant: context.tenant,
     to: booking.user.email,
     variables: buildBaseVariables(context),
+    queue,
+  });
+}
+
+function normalizeEnquiryTemplateName(enquiry = {}) {
+  const product = [
+    enquiry.product,
+    enquiry.spaceType,
+    enquiry.pageType,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_");
+
+  if (product.includes("virtual")) {
+    return "virtual_office_enquiry_confirmation";
+  }
+  if (product.includes("private")) {
+    return "private_office_enquiry_confirmation";
+  }
+  if (product.includes("meeting")) {
+    return "meeting_room_enquiry_confirmation";
+  }
+  if (product.includes("hot_desk") || product.includes("hotdesk")) {
+    return "hot_desk_enquiry_confirmation";
+  }
+  if (product.includes("cowork") || product.includes("co_work")) {
+    return "coworking_enquiry_confirmation";
+  }
+
+  return "workspace_enquiry_confirmation";
+}
+
+function humanizeServiceName(value = "") {
+  return String(value || "workspace")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+export async function sendEnquiryConfirmationEmail({
+  enquiry,
+  queue = true,
+}) {
+  if (!enquiry?.email) {
+    throw new Error("Enquiry email recipient missing");
+  }
+
+  const spaceId = enquiry.spaceId || enquiry.listingId || null;
+  const space = spaceId
+    ? await Space.findById(spaceId).select("name owner address location").lean()
+    : null;
+  const city =
+    enquiry.city ||
+    space?.address?.city?.name ||
+    space?.address?.city ||
+    space?.location?.cityName ||
+    "";
+
+  return sendTemplatedEmail({
+    templateName: normalizeEnquiryTemplateName(enquiry),
+    tenant: space?.owner || null,
+    to: enquiry.email,
+    variables: buildBaseVariables({
+      userName: enquiry.name || "there",
+      workspaceName: enquiry.listingName || space?.name || "Workspace marketplace",
+      city: city || "Your selected city",
+      enquiryId: enquiry._id ? String(enquiry._id) : "",
+      enquiryService: humanizeServiceName(
+        enquiry.product || enquiry.spaceType || "workspace",
+      ),
+    }),
     queue,
   });
 }

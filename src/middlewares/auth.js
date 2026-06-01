@@ -123,7 +123,7 @@ export const loadUserProfile = async (req, res, next) => {
     }
 
     const profile = await User.findById(req.user._id).select(
-      "_id email username phoneNumber role phoneVerified emailVerified kyc isActive createdAt updatedAt"
+      "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone role phoneVerified emailVerified kyc isActive createdAt updatedAt"
     );
 
     if (!profile) {

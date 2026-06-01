@@ -62,7 +62,6 @@ const offerSchema = new Schema(
 );
 
 offerSchema.index({ space: 1, isActive: 1 });
-offerSchema.index({ code: 1 });
 offerSchema.index({ validFrom: 1, validTill: 1 });
 
 export default mongoose.model("Offer", offerSchema);
