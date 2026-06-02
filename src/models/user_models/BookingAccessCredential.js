@@ -188,6 +188,11 @@ const bookingAccessCredentialSchema = new Schema(
       ref: "Resource",
       default: [],
     },
+    accessId: {
+      type: String,
+      required: true,
+      trim: true,
+    },
     deviceIds: {
       type: [Schema.Types.ObjectId],
       ref: "SecurityDevice",
@@ -195,7 +200,7 @@ const bookingAccessCredentialSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["active", "expired", "cancelled"],
+      enum: ["active", "expired", "cancelled", "revoked"],
       default: "active",
       index: true,
     },
@@ -232,7 +237,7 @@ const bookingAccessCredentialSchema = new Schema(
     },
     qr: {
       type: qrCredentialSchema,
-      required: true,
+      default: undefined,
     },
     rfidCards: {
       type: [rfidCardSchema],
@@ -296,7 +301,8 @@ const bookingAccessCredentialSchema = new Schema(
 
 bookingAccessCredentialSchema.index({ userId: 1, status: 1, createdAt: -1 });
 bookingAccessCredentialSchema.index({ ownerUserId: 1, companyId: 1, status: 1 });
-bookingAccessCredentialSchema.index({ "qr.publicId": 1 }, { unique: true });
+bookingAccessCredentialSchema.index({ accessId: 1 }, { unique: true, sparse: true });
+bookingAccessCredentialSchema.index({ "qr.publicId": 1 }, { unique: true, sparse: true });
 
 export default mongoose.model(
   "BookingAccessCredential",

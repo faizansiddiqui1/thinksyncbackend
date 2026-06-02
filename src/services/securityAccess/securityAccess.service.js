@@ -79,14 +79,24 @@ function normalizeRefId(value = null) {
   return value?._id || value;
 }
 
-function normalizeAccessMethods(values = [], fallback = ["qr"]) {
+function normalizeAccessMethods(values = [], fallback = []) {
   const methods = uniqueStrings(
-    values.map((value) => String(value || "").trim().toLowerCase()),
+    (Array.isArray(values) ? values : []).map((value) =>
+      String(value || "").trim().toLowerCase(),
+    ),
   ).filter((value) =>
     ["qr", "rfid", "fingerprint", "face"].includes(value),
   );
 
-  return methods.length ? methods : fallback;
+  return methods.length
+    ? methods
+    : uniqueStrings(
+        (Array.isArray(fallback) ? fallback : []).map((value) =>
+          String(value || "").trim().toLowerCase(),
+        ),
+      ).filter((value) =>
+        ["qr", "rfid", "fingerprint", "face"].includes(value),
+      );
 }
 
 function formatDateTime(value) {
@@ -146,6 +156,7 @@ function flattenDevicePayload(payload = {}) {
     "syncConfiguration.personSyncPath": syncConfiguration.personSyncPath,
     "syncConfiguration.cardSyncPath": syncConfiguration.cardSyncPath,
     "syncConfiguration.accessEventPath": syncConfiguration.accessEventPath,
+    "syncConfiguration.openDoorPath": syncConfiguration.openDoorPath,
     "syncConfiguration.remoteCheckPath": syncConfiguration.remoteCheckPath,
     "syncConfiguration.autoSyncEnabled": syncConfiguration.autoSyncEnabled,
     "syncConfiguration.autoSyncIntervalMinutes":
@@ -271,6 +282,16 @@ function normalizeAssignments(assignments = [], scope) {
     const normalizedResourceId = normalizeRefId(assignment.resource);
     assertAllowedSpace(scope, normalizedSpaceId);
 
+    const accessMethods = normalizeAccessMethods(assignment.accessMethods, []);
+    const bookingAccessEnabled = assignment.bookingAccessEnabled !== false;
+    const isActive = assignment.isActive !== false;
+
+    if (bookingAccessEnabled && isActive && accessMethods.length === 0) {
+      throw new Error(
+        "Every active booking-access assignment must allow at least one access method",
+      );
+    }
+
     const merged = {
       ...getDefaultSecurityAssignment(),
       ...assignment,
@@ -282,11 +303,7 @@ function normalizeAssignments(assignments = [], scope) {
             )
           : ["hourly", "daily", "weekly", "monthly"],
       ),
-      accessMethods: normalizeAccessMethods(
-        Array.isArray(assignment.accessMethods)
-          ? assignment.accessMethods
-          : ["qr"],
-      ),
+      accessMethods,
       accessWindow: {
         beforeStartMinutes: Number(
           assignment?.accessWindow?.beforeStartMinutes ?? 15,
@@ -300,9 +317,44 @@ function normalizeAssignments(assignments = [], scope) {
       workspaceLabel: cleanString(assignment.workspaceLabel),
       meetingRoomLabel: cleanString(assignment.meetingRoomLabel),
       resource: normalizedResourceId || null,
+      bookingAccessEnabled,
+      isActive,
     };
 
     return merged;
+  });
+}
+
+async function assertAssignmentResourcesBelongToSpaces(assignments = []) {
+  const resourceIds = uniqueStrings(
+    assignments
+      .map((assignment) => assignment.resource)
+      .filter(Boolean)
+      .map((resourceId) => String(resourceId)),
+  );
+
+  if (resourceIds.length === 0) return;
+
+  const resources = await Resource.find({
+    _id: { $in: resourceIds },
+  })
+    .select("_id space")
+    .lean();
+  const resourceSpaceMap = new Map(
+    resources.map((resource) => [String(resource._id), String(resource.space)]),
+  );
+
+  assignments.forEach((assignment) => {
+    if (!assignment.resource) return;
+
+    const resourceSpaceId = resourceSpaceMap.get(String(assignment.resource));
+    if (!resourceSpaceId) {
+      throw new Error("Assigned resource was not found");
+    }
+
+    if (resourceSpaceId !== String(assignment.space)) {
+      throw new Error("Assigned resource does not belong to the selected space");
+    }
   });
 }
 
@@ -486,13 +538,37 @@ function buildDeviceWritePayload(scope, payload = {}, existingDevice = null) {
     ...(payload.syncConfiguration || {}),
   };
 
+  const bookingAccessEnabled =
+    payload.bookingAccessEnabled !== undefined
+      ? Boolean(payload.bookingAccessEnabled)
+      : existingDevice?.bookingAccessEnabled !== false;
   const deviceAccessMethods = normalizeAccessMethods(
     Array.isArray(payload.enabledAccessMethods)
       ? payload.enabledAccessMethods.filter((value) =>
           supportedAccessMethods.includes(String(value || "").toLowerCase()),
         )
       : existingDevice?.enabledAccessMethods || ["qr"],
+    [],
   );
+  const assignments =
+    payload.assignments !== undefined
+      ? normalizeAssignments(payload.assignments, scope)
+      : normalizeAssignments(existingDevice?.assignments || [], scope);
+
+  if (bookingAccessEnabled && deviceAccessMethods.length === 0) {
+    throw new Error("Enable at least one device access method");
+  }
+
+  assignments.forEach((assignment) => {
+    const unsupportedMethods = assignment.accessMethods.filter(
+      (method) => !deviceAccessMethods.includes(method),
+    );
+    if (unsupportedMethods.length > 0) {
+      throw new Error(
+        `Assignment access methods must also be enabled on the device: ${unsupportedMethods.join(", ")}`,
+      );
+    }
+  });
 
   return {
     ownerUserId: scope.ownerUserId,
@@ -515,15 +591,9 @@ function buildDeviceWritePayload(scope, payload = {}, existingDevice = null) {
       payload.deviceIdentifier || existingDevice?.deviceIdentifier,
     ),
     enabledAccessMethods: deviceAccessMethods,
-    bookingAccessEnabled:
-      payload.bookingAccessEnabled !== undefined
-        ? Boolean(payload.bookingAccessEnabled)
-        : existingDevice?.bookingAccessEnabled !== false,
+    bookingAccessEnabled,
     syncConfiguration: mergedSyncConfiguration,
-    assignments:
-      payload.assignments !== undefined
-        ? normalizeAssignments(payload.assignments, scope)
-        : normalizeAssignments(existingDevice?.assignments || [], scope),
+    assignments,
     credentialsPayload,
     notes: cleanString(payload.notes || existingDevice?.notes),
   };
@@ -613,7 +683,7 @@ function isBookingEligibleForAccess(booking = {}) {
   );
 }
 
-function buildAssignmentSnapshot(devices = [], booking = {}) {
+export function buildAssignmentSnapshot(devices = [], booking = {}) {
   const bookingResourceIds = uniqueStrings(
     (Array.isArray(booking.resources) ? booking.resources : []).map((item) =>
       String(item?.resourceId?._id || item?.resourceId || ""),
@@ -624,6 +694,7 @@ function buildAssignmentSnapshot(devices = [], booking = {}) {
   return devices.flatMap((device) =>
     (Array.isArray(device.assignments) ? device.assignments : [])
       .filter((assignment) => assignment.isActive !== false)
+      .filter((assignment) => assignment.bookingAccessEnabled !== false)
       .filter(
         (assignment) =>
           String(assignment.space?._id || assignment.space) ===
@@ -641,22 +712,34 @@ function buildAssignmentSnapshot(devices = [], booking = {}) {
           : [];
         return !types.length || types.includes(bookingType);
       })
-      .map((assignment) => ({
-        deviceId: device._id,
-        deviceName: device.deviceName,
-        space: assignment.space?._id || assignment.space || null,
-        resource: assignment.resource?._id || assignment.resource || null,
-        floorLabel: assignment.floorLabel || "",
-        entryGate: assignment.entryGate || "",
-        workspaceLabel: assignment.workspaceLabel || "",
-        meetingRoomLabel: assignment.meetingRoomLabel || "",
-        bookingTypes: assignment.bookingTypes || [],
-        accessMethods: normalizeAccessMethods(assignment.accessMethods || []),
-        accessWindow: assignment.accessWindow || {
-          beforeStartMinutes: 15,
-          afterEndMinutes: 15,
-        },
-      })),
+      .map((assignment) => {
+        const deviceAccessMethods = normalizeAccessMethods(
+          device.enabledAccessMethods,
+          [],
+        );
+        const accessMethods = normalizeAccessMethods(
+          assignment.accessMethods,
+          [],
+        ).filter((method) => deviceAccessMethods.includes(method));
+
+        return {
+          deviceId: device._id,
+          deviceName: device.deviceName,
+          space: assignment.space?._id || assignment.space || null,
+          resource: assignment.resource?._id || assignment.resource || null,
+          floorLabel: assignment.floorLabel || "",
+          entryGate: assignment.entryGate || "",
+          workspaceLabel: assignment.workspaceLabel || "",
+          meetingRoomLabel: assignment.meetingRoomLabel || "",
+          bookingTypes: assignment.bookingTypes || [],
+          accessMethods,
+          accessWindow: assignment.accessWindow || {
+            beforeStartMinutes: 15,
+            afterEndMinutes: 15,
+          },
+        };
+      })
+      .filter((assignment) => assignment.accessMethods.length > 0),
   );
 }
 
@@ -691,6 +774,34 @@ function buildEntryPermissionLabels(snapshot = []) {
 function decryptQrPayload(credential = null) {
   if (!credential?.qr?.encryptedPayload) return "";
   return safeDecrypt(credential.qr.encryptedPayload);
+}
+
+function createBookingAccessId(bookingId) {
+  return `ACC-${String(bookingId).slice(-6).toUpperCase()}-${crypto
+    .randomBytes(3)
+    .toString("hex")
+    .toUpperCase()}`;
+}
+
+function getCredentialAccessId(credential = null) {
+  return cleanString(credential?.accessId || credential?.qr?.publicId);
+}
+
+async function createQrCredential(accessId) {
+  const secret = crypto.randomBytes(24).toString("hex");
+  const qrPayload = `TSA|${accessId}|${secret}`;
+
+  return {
+    publicId: accessId,
+    secretHash: hashValue(secret),
+    encryptedPayload: enc(qrPayload),
+    dataUri: await QRCode.toDataURL(qrPayload, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 280,
+    }),
+    version: 1,
+  };
 }
 
 function serializeAccessCredential(credential, booking = {}, logs = []) {
@@ -739,7 +850,7 @@ function serializeAccessCredential(credential, booking = {}, logs = []) {
       createdAt: log.createdAt,
     })),
     deviceEnabledEntries: (credential.deviceIds || []).length,
-    canRegenerate: true,
+    canRegenerate: Boolean(credential.qr?.publicId),
   };
 }
 
@@ -767,6 +878,11 @@ async function getDevicesForBookingAccess(spaceOwnerId, spaceId) {
 }
 
 async function pushCredentialToDevice(device, credential, booking) {
+  const accessId = getCredentialAccessId(credential);
+  if (!accessId) {
+    throw new Error("Booking access ID is missing");
+  }
+
   const credentials = decryptDeviceCredentials(device);
   const payload = {
     brand: device.brand,
@@ -793,11 +909,11 @@ async function pushCredentialToDevice(device, credential, booking) {
       },
       data: {
         UserInfo: {
-          employeeNo: credential.qr.publicId,
+          employeeNo: accessId,
           name:
             booking?.user?.name ||
             booking?.user?.email ||
-            credential.qr.publicId,
+            accessId,
           userType: "visitor",
           Valid: {
             enable: true,
@@ -828,8 +944,8 @@ async function pushCredentialToDevice(device, credential, booking) {
         },
         data: {
           CardInfo: {
-            employeeNo: credential.qr.publicId,
-            cardNo: credential.rfidCards[0].providerCardRef || credential.qr.publicId,
+            employeeNo: accessId,
+            cardNo: credential.rfidCards[0].providerCardRef || accessId,
           },
         },
       });
@@ -867,13 +983,15 @@ async function pushCredentialToDevice(device, credential, booking) {
     data: {
       bookingAccess: {
         bookingId: String(booking._id),
-        accessId: credential.qr.publicId,
+        accessId,
         userId: String(booking?.user?.userId || ""),
         userName: booking?.user?.name || booking?.user?.email || "",
         validFrom: credential.validity.startsAt,
         validTo: credential.validity.endsAt,
         qrToken: decryptQrPayload(credential),
-        cardRefs: credential.rfidCards.map((item) => item.providerCardRef || ""),
+        cardRefs: (credential.rfidCards || []).map(
+          (item) => item.providerCardRef || "",
+        ),
         spaceId: String(booking.space?._id || booking.space || ""),
       },
     },
@@ -913,7 +1031,7 @@ async function loadBookingWithSpace(bookingInput) {
 
 export async function ensureBookingAccessCredential(
   bookingInput,
-  { regenerate = false, includeLogs = false } = {},
+  { regenerate = false, includeLogs = false, syncDevices = true } = {},
 ) {
   const booking = await loadBookingWithSpace(bookingInput);
   if (!booking || !isBookingEligibleForAccess(booking)) {
@@ -939,8 +1057,34 @@ export async function ensureBookingAccessCredential(
   const assignmentSnapshot = buildAssignmentSnapshot(devices, booking);
   const accessMethods = normalizeAccessMethods(
     assignmentSnapshot.flatMap((item) => item.accessMethods || []),
-    ["qr"],
+    [],
   );
+  const assignedDeviceIds = new Set(
+    assignmentSnapshot.map((assignment) => String(assignment.deviceId || "")),
+  );
+  const matchedDevices = devices.filter((device) =>
+    assignedDeviceIds.has(String(device._id)),
+  );
+
+  if (assignmentSnapshot.length === 0 || accessMethods.length === 0) {
+    if (existingCredential) {
+      existingCredential.accessId =
+        getCredentialAccessId(existingCredential) ||
+        createBookingAccessId(booking._id);
+      existingCredential.status = "revoked";
+      existingCredential.deviceIds = [];
+      existingCredential.accessMethods = [];
+      existingCredential.assignmentSnapshot = [];
+      existingCredential.qr = undefined;
+      await existingCredential.save();
+    }
+
+    if (regenerate) {
+      throw new Error("QR access is not enabled for this booked resource");
+    }
+
+    return null;
+  }
   const beforeStartMinutes = Math.max(
     15,
     ...assignmentSnapshot.map(
@@ -969,17 +1113,10 @@ export async function ensureBookingAccessCredential(
   let credentialDoc = existingCredential;
 
   if (!credentialDoc) {
-    const publicId = `ACC-${String(booking._id).slice(-6).toUpperCase()}-${crypto
-      .randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
-    const secret = crypto.randomBytes(24).toString("hex");
-    const qrPayload = `TSA|${publicId}|${secret}`;
-    const qrDataUri = await QRCode.toDataURL(qrPayload, {
-      errorCorrectionLevel: "M",
-      margin: 1,
-      width: 280,
-    });
+    const accessId = createBookingAccessId(booking._id);
+    const qr = accessMethods.includes("qr")
+      ? await createQrCredential(accessId)
+      : undefined;
 
     credentialDoc = await BookingAccessCredential.create({
       booking: booking._id,
@@ -995,10 +1132,11 @@ export async function ensureBookingAccessCredential(
           String(item?.resourceId?._id || item?.resourceId || ""),
         ),
       ),
-      deviceIds: uniqueStrings(devices.map((device) => String(device._id))),
+      accessId,
+      deviceIds: uniqueStrings(matchedDevices.map((device) => String(device._id))),
       status: currentStatus,
       accessMethods,
-      primaryMethod: "qr",
+      primaryMethod: accessMethods[0],
       validity: {
         startsAt: validityStartsAt,
         endsAt: validityEndsAt,
@@ -1006,13 +1144,7 @@ export async function ensureBookingAccessCredential(
         earlyAccessMinutes: beforeStartMinutes,
         lateAccessMinutes: afterEndMinutes,
       },
-      qr: {
-        publicId,
-        secretHash: hashValue(secret),
-        encryptedPayload: enc(qrPayload),
-        dataUri: qrDataUri,
-        version: 1,
-      },
+      ...(qr ? { qr } : {}),
       assignmentSnapshot,
       permissions: {
         entryPermissions: buildEntryPermissionLabels(assignmentSnapshot),
@@ -1022,6 +1154,8 @@ export async function ensureBookingAccessCredential(
       },
     });
   } else {
+    credentialDoc.accessId =
+      getCredentialAccessId(credentialDoc) || createBookingAccessId(booking._id);
     credentialDoc.status = currentStatus;
     credentialDoc.ownerUserId = space.owner;
     credentialDoc.adminProfileId = ownerAdminProfile?._id || null;
@@ -1035,8 +1169,11 @@ export async function ensureBookingAccessCredential(
         String(item?.resourceId?._id || item?.resourceId || ""),
       ),
     );
-    credentialDoc.deviceIds = uniqueStrings(devices.map((device) => String(device._id)));
+    credentialDoc.deviceIds = uniqueStrings(
+      matchedDevices.map((device) => String(device._id)),
+    );
     credentialDoc.accessMethods = accessMethods;
+    credentialDoc.primaryMethod = accessMethods[0];
     credentialDoc.validity = {
       startsAt: validityStartsAt,
       endsAt: validityEndsAt,
@@ -1052,7 +1189,17 @@ export async function ensureBookingAccessCredential(
       validityStartsAt,
     )} to ${formatDateTime(validityEndsAt)}`;
 
+    if (!accessMethods.includes("qr")) {
+      credentialDoc.qr = undefined;
+    } else if (!credentialDoc.qr?.publicId) {
+      credentialDoc.qr = await createQrCredential(credentialDoc.accessId);
+    }
+
     if (regenerate) {
+      if (!accessMethods.includes("qr") || !credentialDoc.qr?.publicId) {
+        throw new Error("QR access is not enabled for this booked resource");
+      }
+
       const secret = crypto.randomBytes(24).toString("hex");
       const qrPayload = `TSA|${credentialDoc.qr.publicId}|${secret}`;
       credentialDoc.qr.secretHash = hashValue(secret);
@@ -1073,7 +1220,7 @@ export async function ensureBookingAccessCredential(
 
   const plainCredential = toObject(credentialDoc);
 
-  for (const device of devices) {
+  for (const device of syncDevices ? matchedDevices : []) {
     try {
       const syncResult = await pushCredentialToDevice(
         device,
@@ -1170,17 +1317,10 @@ export async function attachAccessToBookings(bookings = []) {
   const credentialMap = new Map();
   const eligibleBookings = list.filter(isBookingEligibleForAccess);
 
-  const existingCredentials = await BookingAccessCredential.find({
-    booking: { $in: eligibleBookings.map((booking) => booking._id) },
-  }).lean();
-
-  existingCredentials.forEach((credential) => {
-    credentialMap.set(String(credential.booking), credential);
-  });
-
   for (const booking of eligibleBookings) {
-    if (credentialMap.has(String(booking._id))) continue;
-    const credential = await ensureBookingAccessCredential(booking);
+    const credential = await ensureBookingAccessCredential(booking, {
+      syncDevices: false,
+    });
     if (credential) {
       credentialMap.set(String(booking._id), credential);
     }
@@ -1297,6 +1437,7 @@ export async function saveCompanySecurityDevice(user, payload, deviceId = null) 
   }
 
   const writePayload = buildDeviceWritePayload(scope, payload, existingDevice);
+  await assertAssignmentResourcesBelongToSpaces(writePayload.assignments);
   const validationPayload = materializeDevicePayloadForValidation(
     writePayload,
     existingDevice,
@@ -1550,17 +1691,6 @@ export async function regenerateMyBookingAccess(userId, bookingId) {
   });
 }
 
-function findMatchingAssignment(credential = null, deviceId = null) {
-  if (!credential || !Array.isArray(credential.assignmentSnapshot)) return null;
-  if (!deviceId) return credential.assignmentSnapshot[0] || null;
-
-  return (
-    credential.assignmentSnapshot.find(
-      (assignment) => String(assignment.deviceId || "") === String(deviceId),
-    ) || null
-  );
-}
-
 function resolveAssignmentTimeWindow(booking = {}, assignment = null, credential = null) {
   const beforeStartMinutes =
     assignment?.accessWindow?.beforeStartMinutes ??
@@ -1658,6 +1788,14 @@ export async function validateSecurityAccessAttempt(payload = {}) {
 
   if (!credentialValue) {
     throw new Error("Credential value is required");
+  }
+
+  if (!deviceId) {
+    throw new Error("Device ID is required");
+  }
+
+  if (!["qr", "rfid", "fingerprint", "face"].includes(accessMethod)) {
+    throw new Error("Unsupported access method");
   }
 
   let credential = null;
@@ -1771,10 +1909,14 @@ export async function validateSecurityAccessAttempt(payload = {}) {
     };
   }
 
-  const device = deviceId
-    ? await SecurityDevice.findById(deviceId).lean()
-    : null;
-  const assignment = findMatchingAssignment(credential, deviceId);
+  const device = await SecurityDevice.findById(deviceId).lean();
+  const liveAssignments = device
+    ? buildAssignmentSnapshot([device], booking)
+    : [];
+  const assignment =
+    liveAssignments.find((item) => item.accessMethods.includes(accessMethod)) ||
+    liveAssignments[0] ||
+    null;
   const timeWindow = resolveAssignmentTimeWindow(booking, assignment, credential);
   const now = new Date();
 
@@ -1813,7 +1955,7 @@ export async function validateSecurityAccessAttempt(payload = {}) {
     reasonCode = "space_mismatch";
   }
 
-  if (granted && deviceId) {
+  if (granted) {
     if (!device) {
       granted = false;
       message = "Device not found";
@@ -1828,10 +1970,7 @@ export async function validateSecurityAccessAttempt(payload = {}) {
       granted = false;
       message = "Device is offline or disconnected";
       reasonCode = "device_offline";
-    } else if (
-      !assignment ||
-      String(assignment.deviceId || "") !== String(deviceId)
-    ) {
+    } else if (!assignment) {
       granted = false;
       message = "Credential is not assigned to this device";
       reasonCode = "device_not_assigned";
@@ -1848,7 +1987,7 @@ export async function validateSecurityAccessAttempt(payload = {}) {
 
   const deviceTrigger = await sendGrantToDevice(device, granted, {
     serialNo: payload.serialNo,
-    remark: credential.qr?.publicId || credentialPreview,
+    remark: getCredentialAccessId(credential) || credentialPreview,
     bookingId: String(booking._id),
     accessMethod,
   }).catch((error) => ({

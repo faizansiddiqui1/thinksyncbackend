@@ -99,6 +99,7 @@ export const SECURITY_PROVIDER_CATALOG = [
           "syncConfiguration.personSyncPath",
           "syncConfiguration.cardSyncPath",
           "syncConfiguration.accessEventPath",
+          "syncConfiguration.openDoorPath",
           "syncConfiguration.autoSyncEnabled",
           "syncConfiguration.autoSyncIntervalMinutes",
         ],
@@ -120,6 +121,7 @@ export const SECURITY_PROVIDER_CATALOG = [
           "syncConfiguration.personSyncPath",
           "syncConfiguration.cardSyncPath",
           "syncConfiguration.accessEventPath",
+          "syncConfiguration.openDoorPath",
           "syncConfiguration.autoSyncEnabled",
           "syncConfiguration.autoSyncIntervalMinutes",
         ],
@@ -141,6 +143,7 @@ export const SECURITY_PROVIDER_CATALOG = [
           "syncConfiguration.personSyncPath",
           "syncConfiguration.cardSyncPath",
           "syncConfiguration.accessEventPath",
+          "syncConfiguration.openDoorPath",
           "syncConfiguration.autoSyncEnabled",
           "syncConfiguration.autoSyncIntervalMinutes",
         ],
@@ -247,6 +250,11 @@ export const SECURITY_DEVICE_FIELDS = [
     type: "text",
   },
   {
+    key: "syncConfiguration.openDoorPath",
+    label: "Sync Configuration: Open Door Path",
+    type: "text",
+  },
+  {
     key: "syncConfiguration.remoteCheckPath",
     label: "Sync Configuration: Remote Check Path",
     type: "text",
@@ -345,6 +353,7 @@ export function getDefaultSyncConfiguration(brand = "", authMethod = "") {
     personSyncPath: "",
     cardSyncPath: "",
     accessEventPath: "",
+    openDoorPath: "",
     remoteCheckPath:
       normalizeDeviceBrand(brand) === "hikvision"
         ? "/ISAPI/AccessControl/remoteCheck?format=json"

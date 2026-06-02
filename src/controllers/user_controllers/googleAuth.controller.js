@@ -52,6 +52,27 @@ export const getGoogleConnectionStatus = async (req, res) => {
   }
 };
 
+export const disconnectGoogleCalendar = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+
+    const disconnected = await googleAuthService.disconnectGoogleCalendar(userId);
+    return res.json({
+      success: true,
+      connected: false,
+      disconnected,
+      message: disconnected
+        ? "Google Calendar disconnected"
+        : "Google Calendar was already disconnected",
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 export const getConnectedUsersStats = async (req, res) => {
   try {
     // only super admin can view this

@@ -16,6 +16,20 @@ const DocumentSchema = new Schema(
   { _id: false }
 );
 
+const KycConfigSchema = new Schema(
+  {
+    requirePan: { type: Boolean, default: true },
+    requireAadhaar: { type: Boolean, default: true },
+    requireGstin: { type: Boolean, default: false },
+    requireCin: { type: Boolean, default: false },
+    requireCompanyPan: { type: Boolean, default: false },
+    requireFaceMatch: { type: Boolean, default: false },
+    requireBankCheack: { type: Boolean, default: false },
+    requireVideoKyc: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
 const KycSchema = new Schema({
   status: {
     type: String,
@@ -27,6 +41,7 @@ const KycSchema = new Schema({
   reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
   reason: String,
   documents: [DocumentSchema],
+  config: { type: KycConfigSchema, default: () => ({}) },
 });
 
 const AdminProfileSchema = new Schema(

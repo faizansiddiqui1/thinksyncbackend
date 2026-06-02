@@ -1,11 +1,15 @@
 import { google } from "googleapis";
 import GoogleToken from "../models/user_models/GoogleToken.js";
 
+const REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ||
+  `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/google/callback`;
+
 function getOAuthClient() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    "http://localhost:5000/api/auth/google/callback",
+    REDIRECT_URI,
   );
 }
 
@@ -71,6 +75,26 @@ export async function saveTokensForUser(userId, tokens) {
 
 export async function getTokensForUser(userId) {
   return GoogleToken.findOne({ userId });
+}
+
+export async function disconnectGoogleCalendar(userId) {
+  if (!userId) return false;
+
+  const tokens = await GoogleToken.findOne({ userId });
+  if (!tokens) return false;
+
+  const tokenToRevoke = tokens.refreshToken || tokens.accessToken;
+  if (tokenToRevoke) {
+    try {
+      const oAuth2Client = getOAuthClient();
+      await oAuth2Client.revokeToken(tokenToRevoke);
+    } catch (error) {
+      console.warn("Google token revoke failed:", error.message);
+    }
+  }
+
+  await GoogleToken.deleteOne({ _id: tokens._id });
+  return true;
 }
 
 export async function refreshAccessTokenIfNeeded(tokens) {

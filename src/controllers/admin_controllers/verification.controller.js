@@ -5,6 +5,7 @@ import * as svc from "../../services/verification.service.js";
 import { ApiError } from "../../utils/apiResponse.js";
 
 import Company from "../../models/super_admin_models/Company.model.js";
+import { getGlobalKycConfig as getStoredGlobalKycConfig } from "../../services/globalKycConfig.service.js";
 
 /** ensure nested object exists */
 export function ensureField(obj, field) {
@@ -31,6 +32,10 @@ function getContext(req) {
 
 function getTenant(req) {
   return getContext(req).tenant || null;
+}
+
+async function getSelfHealingGlobalKycConfig() {
+  return getStoredGlobalKycConfig();
 }
 
 async function getGlobalKycConfig() {
@@ -99,7 +104,7 @@ export async function getAdminKycStatusHandler(req, res) {
       accountType = "admin";
     }
 
-    const rawConfig = await getGlobalKycConfig();
+    const rawConfig = await getSelfHealingGlobalKycConfig();
     const config = normalizeConfig(rawConfig);
 
     const userKycStatus = await svc.buildUserKycPayload(user._id);
@@ -265,7 +270,7 @@ export async function updateAdminKyc(userId) {
 
   if (!adminProfile) return;
 
-  const rawConfig = await getGlobalKycConfig();
+  const rawConfig = await getSelfHealingGlobalKycConfig();
   const config = normalizeConfig(rawConfig);
 
   const user = await User.findById(userId).lean();

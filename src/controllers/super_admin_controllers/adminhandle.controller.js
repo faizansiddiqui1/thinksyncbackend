@@ -1,4 +1,8 @@
 import AdminProfile from "../../models/admin_models/AdminProfile.js";
+import {
+  ensureGlobalKycConfig,
+  updateGlobalKycConfig as saveGlobalKycConfig,
+} from "../../services/globalKycConfig.service.js";
 
 // Update specific admin config by admin id = user._id
 export async function updateKycConfig(req, res) {
@@ -26,28 +30,47 @@ export async function updateKycConfig(req, res) {
   }
 }
 
-// update existing config for  all admins 
-export async function updateGlobalKycConfig(req, res) {
+export async function getGlobalKycConfig(req, res) {
   try {
-    const update = req.body;
-
-    // update all admin profiles
-    await AdminProfile.updateMany(
-      { "company.name": { $ne: "GLOBAL_DEFAULT" } },
-      {
-        $set: Object.fromEntries(
-          Object.entries(update).map(([k, v]) => [`kyc.config.${k}`, v]),
-        ),
-      },
-    );
-
-    res.json({
+    const state = await ensureGlobalKycConfig();
+    return res.json({
       success: true,
-      message: "Global KYC config updated for all admins",
-      config: update,
+      message: state.created
+        ? "Global KYC config created with safe defaults"
+        : "Global KYC config loaded",
+      data: state,
     });
   } catch (err) {
-    res.status(500).json({
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+export async function createGlobalKycConfig(req, res) {
+  try {
+    const state = await saveGlobalKycConfig(req.body || {});
+    return res.status(state.created ? 201 : 200).json({
+      success: true,
+      message: state.created
+        ? "Global KYC config created"
+        : "Global KYC config already existed and was updated",
+      data: state,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+// Update the marketplace-wide default used by KYC flows.
+export async function updateGlobalKycConfig(req, res) {
+  try {
+    const state = await saveGlobalKycConfig(req.body || {});
+    return res.json({
+      success: true,
+      message: "Global KYC config updated",
+      data: state,
+    });
+  } catch (err) {
+    return res.status(500).json({
       success: false,
       message: err.message,
     });
@@ -57,29 +80,13 @@ export async function updateGlobalKycConfig(req, res) {
 // Update default config for upcoming admins via superadmin
 export async function updateDefaultKycConfig(req, res) {
   try {
-    const update = req.body;
-
-    const global = await AdminProfile.findOne({
-      "company.name": "GLOBAL_DEFAULT",
-    });
-
-    if (!global) {
-      return res.status(404).json({ message: "Default config not found" });
-    }
-
-    global.kyc.config = {
-      ...global.kyc.config,
-      ...update,
-    };
-
-    await global.save();
-
-    res.json({
+    const state = await saveGlobalKycConfig(req.body || {});
+    return res.json({
       success: true,
       message: "Default config updated",
-      config: global.kyc.config,
+      data: state,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: err.message });
   }
 }

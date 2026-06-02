@@ -2,6 +2,8 @@ import express from "express";
 import { requireAuth } from "../middlewares/auth.js";
 import { requireSuperAdmin } from "../middlewares/superadmin.js";
 import {
+  createGlobalKycConfig,
+  getGlobalKycConfig,
   updateDefaultKycConfig,
   updateGlobalKycConfig,
   updateKycConfig,
@@ -97,6 +99,20 @@ router.patch(
   requireAuth,
   requireSuperAdmin,
   updateGlobalKycConfig,
+);
+
+router.get(
+  "/super-admin/global-kyc-config",
+  requireAuth,
+  requireSuperAdmin,
+  getGlobalKycConfig,
+);
+
+router.post(
+  "/super-admin/global-kyc-config",
+  requireAuth,
+  requireSuperAdmin,
+  createGlobalKycConfig,
 );
 
 router.patch(

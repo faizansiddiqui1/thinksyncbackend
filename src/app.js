@@ -52,6 +52,7 @@ import consultantRoutes from "./routes/consultant.routes.js";
 import marketplaceContentRoutes from "./routes/marketplaceContent.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
+import { ensureGlobalKycConfig } from "./services/globalKycConfig.service.js";
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
@@ -68,10 +69,8 @@ app.use(
 );
 
 const allowedOrigins = [
-  "http://localhost:3000",
   "http://localhost:4028",
-  "http://localhost:4029",
-  "http://192.168.31.110:4028/landing-page",
+  "https://thinksyncspace.com/",
   process.env.FRONTEND_URL,
 ];
 
@@ -211,6 +210,12 @@ const PORT = parseInt(process.env.PORT, 10) || 5000;
 
 async function startServer() {
   await connectDB();
+  const globalKyc = await ensureGlobalKycConfig();
+  console.log(
+    globalKyc.created
+      ? "Global KYC config created with safe defaults"
+      : "Global KYC config ready",
+  );
   await ensureDefaultEmailTemplates();
   startBookingCompletionCron();
 

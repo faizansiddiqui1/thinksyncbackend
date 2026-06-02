@@ -20,6 +20,7 @@ import {
 } from "../controllers/admin_controllers/verification.controller.js";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import CompanyVerification from "../models/admin_models/CompanyVerification.js";
+import { getGlobalKycConfig } from "./globalKycConfig.service.js";
 
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
@@ -46,11 +47,8 @@ function getS3Client(aws) {
 }
 
 async function isFaceMatchRequired() {
-  const admin = await AdminProfile.findOne({
-    "company.name": "GLOBAL_DEFAULT",
-  }).lean();
-
-  return admin?.kyc?.config?.requireFaceMatch === true;
+  const config = await getGlobalKycConfig();
+  return config.requireFaceMatch === true;
 }
 
 // helper to decide verified flag from provider response

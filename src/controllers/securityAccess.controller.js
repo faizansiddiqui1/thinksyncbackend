@@ -11,9 +11,20 @@ import {
   validateSecurityAccessAttempt,
 } from "../services/securityAccess/securityAccess.service.js";
 import { getSecurityProviderCatalog } from "../services/securityAccess/catalog.service.js";
+import crypto from "crypto";
 
 function getErrorMessage(error, fallback = "Something went wrong") {
   return error?.message || fallback;
+}
+
+function isMatchingSecret(actual = "", expected = "") {
+  const actualBuffer = Buffer.from(String(actual));
+  const expectedBuffer = Buffer.from(String(expected));
+
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+  );
 }
 
 export async function getSecurityProvidersHandler(req, res) {
@@ -153,6 +164,23 @@ export async function regenerateMyBookingAccessHandler(req, res) {
 
 export async function validateSecurityAccessAttemptHandler(req, res) {
   try {
+    const validationKey = process.env.SECURITY_ACCESS_VALIDATION_KEY || "";
+    if (!validationKey) {
+      return res.status(503).json({
+        success: false,
+        message: "Security access validation key is not configured",
+      });
+    }
+
+    if (
+      !isMatchingSecret(req.get("x-security-access-key") || "", validationKey)
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized security access connector",
+      });
+    }
+
     const result = await validateSecurityAccessAttempt(req.body || {});
     return res.json({
       success: true,
