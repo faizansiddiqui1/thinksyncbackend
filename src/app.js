@@ -68,18 +68,35 @@ app.use(
   }),
 );
 
-const allowedOrigins = [
-  "http://localhost:4028",
-  "https://thinksyncspace.com/",
-  process.env.FRONTEND_URL,
-];
+function normalizeOrigin(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+const allowedOrigins = new Set(
+  [
+    "http://localhost:3000",
+    "http://localhost:4028",
+    "https://thinksyncspace.com",
+    "https://www.thinksyncspace.com",
+    process.env.FRONTEND_URL,
+    process.env.ADMIN_FRONTEND_URL,
+    ...(process.env.CORS_ORIGINS || "").split(","),
+  ]
+    .map(normalizeOrigin)
+    .filter(Boolean),
+);
 
 app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("Not allowed by CORS"));
+      if (allowedOrigins.has(normalizeOrigin(origin))) return callback(null, true);
+
+      const error = new Error("Not allowed by CORS");
+      error.statusCode = 403;
+      return callback(error);
     },
     credentials: true,
   }),
