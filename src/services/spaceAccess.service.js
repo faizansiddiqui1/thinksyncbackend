@@ -17,6 +17,40 @@ export function isSuperAdminUser(user = null) {
   return String(user?.role || "").toLowerCase() === "super_admin";
 }
 
+export function isPlainOwnerAdmin(user = null) {
+  return (
+    String(user?.role || "").toLowerCase() === "admin" &&
+    !user?.companyId
+  );
+}
+
+function normalizeSpaceType(spaceType) {
+  const normalized = String(spaceType || "").trim().toLowerCase();
+  if (normalized === "coworking_space") return "cowork_space";
+  if (normalized === "vertual_office") return "virtual_office";
+  return normalized;
+}
+
+export function isShortTermLeasingSpace(space = null) {
+  return (
+    normalizeSpaceType(space?.spaceType) === "cowork_space" &&
+    (space?.listingModes?.shortTerm === true ||
+      space?.leasingType === "short_term" ||
+      space?.listingType === "short_term")
+  );
+}
+
+export function assertPlainAdminShortTermLeasingSpace(space, user, moduleName = "This module") {
+  if (!isPlainOwnerAdmin(user)) return;
+
+  if (!isShortTermLeasingSpace(space)) {
+    throw makeHttpError(
+      403,
+      `${moduleName} is available only for Short-Term Leasing spaces`,
+    );
+  }
+}
+
 export async function getScopeOwnerId(user = null) {
   if (!user) return null;
 
@@ -82,7 +116,7 @@ export async function hasCompanySpaceAccess(user, spaceId) {
 export async function ensureSpaceAccess(
   spaceId,
   user,
-  { select = "_id owner name slug status isPublished approvalStatus address spaceType" } = {},
+  { select = "_id owner name slug status isPublished approvalStatus address spaceType listingModes leasingType listingType" } = {},
 ) {
   if (!spaceId || !mongoose.Types.ObjectId.isValid(String(spaceId))) {
     throw makeHttpError(400, "Invalid space id");

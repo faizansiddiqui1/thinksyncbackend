@@ -264,6 +264,27 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    reservationType: {
+      type: String,
+      enum: ["PAID_BOOKING", "PLAN_RESERVATION", "INTERNAL_BOOKING"],
+      default: "PAID_BOOKING",
+      index: true,
+    },
+
+    purchaseIntent: {
+      type: String,
+      enum: ["BOOKING", "PLAN_MEMBERSHIP"],
+      default: "BOOKING",
+      index: true,
+    },
+
+    planPurchase: {
+      type: Schema.Types.ObjectId,
+      ref: "PlanPurchase",
+      default: null,
+      index: true,
+    },
+
     startDateTime: {
       type: Date,
       required: true,
@@ -576,9 +597,12 @@ bookingSchema.pre("validate", async function (next) {
     // calculate duration
     this.calculateDuration();
 
+    const isPlanMembershipPurchase = this.purchaseIntent === "PLAN_MEMBERSHIP";
     let duration = 1;
 
-    if (this.plan?.type === "hourly") {
+    if (isPlanMembershipPurchase) {
+      duration = 1;
+    } else if (this.plan?.type === "hourly") {
       duration = this.bookingDuration.totalHours || 1;
     } else if (this.plan?.type === "weekly") {
       duration = Math.ceil((this.bookingDuration.totalDays || 1) / 7);
@@ -589,6 +613,7 @@ bookingSchema.pre("validate", async function (next) {
     }
 
     let baseAmount = 0;
+    let gstPercentage = 18;
 
     /* =========================
        PLAN PRICE
@@ -607,6 +632,7 @@ bookingSchema.pre("validate", async function (next) {
         );
       }
 
+      gstPercentage = Number(plan.gstPercentage ?? 18);
       baseAmount += Number(plan.price || 0) * duration;
     }
 
@@ -644,13 +670,13 @@ bookingSchema.pre("validate", async function (next) {
     }
 
     const gstAmount = Math.round(
-      baseAmount * 0.18,
+      baseAmount * (gstPercentage / 100),
     );
 
     this.priceBreakdown.basePrice =
       baseAmount;
 
-    this.priceBreakdown.gstPercentage = 18;
+    this.priceBreakdown.gstPercentage = gstPercentage;
 
     this.priceBreakdown.gstAmount =
       gstAmount;

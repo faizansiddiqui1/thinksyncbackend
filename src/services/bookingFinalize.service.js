@@ -7,6 +7,7 @@ import {
   sendShortTermBookingAccessEmail,
 } from "./mail.service.js";
 import { ensureBookingAccessCredential } from "./securityAccess/securityAccess.service.js";
+import { activatePaidPlanPurchase } from "./planMembership.service.js";
 
 function getUserIdFromBookingData(bookingData) {
   return (
@@ -66,9 +67,51 @@ function normalizeAddons(addons = []) {
     .filter(Boolean);
 }
 
+function isPlanMembershipCheckout(bookingData = {}) {
+  return bookingData.purchaseIntent === "PLAN_MEMBERSHIP";
+}
+
+async function ensurePlanPurchaseForMembership({ bookingData, paymentInfo, gateway }) {
+  const userId = getUserIdFromBookingData(bookingData);
+  const planId = bookingData?.plan?.planId;
+  const startDate =
+    bookingData?.startDateTime ||
+    bookingData?.bookingDuration?.startDate ||
+    bookingData?.bookingDate ||
+    null;
+
+  if (!userId || !planId || !startDate) {
+    throw new Error("Membership checkout is missing user, plan, or start date");
+  }
+
+  const purchase = await activatePaidPlanPurchase(
+    {
+      _id: userId,
+      name: bookingData?.user?.name || bookingData?.name || "",
+      username: bookingData?.user?.name || bookingData?.name || "",
+      email: bookingData?.user?.email || bookingData?.email || "",
+      phone: bookingData?.user?.phone || bookingData?.phone || "",
+      phoneNumber: bookingData?.user?.phone || bookingData?.phone || "",
+    },
+    {
+      planId,
+      startDate,
+      paymentMethod: gateway,
+      paymentReference: paymentInfo.reference,
+    },
+  );
+
+  if (!purchase?.success) {
+    throw new Error(purchase?.error || "Plan purchase activation failed");
+  }
+
+  return purchase.data;
+}
+
 function buildLegacyBooking(temp, paymentInfo, gateway) {
   const bookingData = temp.bookingData || {};
   const user = bookingData.user || {};
+  const isMembership = isPlanMembershipCheckout(bookingData);
   return {
     bookingId: temp.internalBookingId || undefined,
     user: {
@@ -87,8 +130,11 @@ function buildLegacyBooking(temp, paymentInfo, gateway) {
     startDateTime: bookingData.startDateTime,
     endDateTime: bookingData.endDateTime,
     timezone: bookingData.timezone || "Asia/Kolkata",
+    purchaseIntent: bookingData.purchaseIntent || "BOOKING",
     specialRequests: bookingData.specialRequests || "",
-    notes: bookingData.notes || "",
+    notes: isMembership
+      ? "Membership plan purchase checkout"
+      : bookingData.notes || "",
     adminNotes: bookingData.adminNotes || "",
     priceBreakdown: buildPriceBreakdown(temp, temp.totalAmount),
     payment: {
@@ -100,7 +146,7 @@ function buildLegacyBooking(temp, paymentInfo, gateway) {
       paidAt: new Date(),
     },
     paymentStatus: "paid",
-    status: "confirmed",
+    status: isMembership ? "completed" : "confirmed",
   };
 }
 
@@ -131,6 +177,18 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
       ? await Booking.findById(temp.bookingId)
       : null;
     if (existingBooking?.payment?.status === "paid") {
+      const bookingData = temp.bookingData || {};
+      if (isPlanMembershipCheckout(bookingData) && !existingBooking.planPurchase) {
+        const planPurchase = await ensurePlanPurchaseForMembership({
+          bookingData,
+          paymentInfo: { ...paymentInfo, reference },
+          gateway,
+        });
+        existingBooking.planPurchase = planPurchase?._id || planPurchase?.id || null;
+        existingBooking.status = "completed";
+        existingBooking.purchaseIntent = "PLAN_MEMBERSHIP";
+        await existingBooking.save();
+      }
       await TempBooking.deleteOne({ _id: temp._id });
       return { success: true, data: existingBooking };
     }
@@ -143,6 +201,7 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     if (!claimedTemp) return { success: true, processing: true };
 
     const bookingData = claimedTemp.bookingData || {};
+    const isMembership = isPlanMembershipCheckout(bookingData);
     const userId = getUserIdFromBookingData(bookingData);
     if (claimedTemp.couponCode) {
       await redeemOffer({
@@ -165,8 +224,9 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
         attempt.updatedAt = new Date();
       }
 
-      booking.status = "confirmed";
+      booking.status = isMembership ? "completed" : "confirmed";
       booking.holdExpiresAt = null;
+      booking.purchaseIntent = bookingData.purchaseIntent || booking.purchaseIntent || "BOOKING";
       booking.payment = {
         ...booking.payment.toObject?.(),
         method: booking.payment?.method || bookingData?.payment?.method || "upi",
@@ -185,24 +245,42 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
       );
     }
 
-    sendBookingConfirmationEmail({ booking }).catch((error) => {
-      console.error("booking confirmation email failed:", error.message);
-    });
+    let planPurchase = null;
+    if (isMembership) {
+      planPurchase = await ensurePlanPurchaseForMembership({
+        bookingData,
+        paymentInfo: { ...paymentInfo, reference },
+        gateway,
+      });
+      booking.planPurchase = planPurchase?._id || planPurchase?.id || null;
+      booking.status = "completed";
+      booking.holdExpiresAt = null;
+      booking.notes = "Membership plan purchased. Resource reservations are created separately.";
+      await booking.save();
+    } else {
+      sendBookingConfirmationEmail({ booking }).catch((error) => {
+        console.error("booking confirmation email failed:", error.message);
+      });
+    }
 
-    try {
-      const userId = booking.user?.userId || null;
-      if (userId && !booking.googleEventId) {
-        await googleCalendarService.createEventForBooking(booking._id, userId);
+    if (!isMembership) {
+      try {
+        const userId = booking.user?.userId || null;
+        if (userId && !booking.googleEventId) {
+          await googleCalendarService.createEventForBooking(booking._id, userId);
+        }
+      } catch (error) {
+        console.error("google calendar create failed:", error?.message || error);
       }
-    } catch (error) {
-      console.error("google calendar create failed:", error?.message || error);
     }
 
     let bookingAccess = null;
-    try {
-      bookingAccess = await ensureBookingAccessCredential(booking);
-    } catch (error) {
-      console.error("booking access credential generation failed:", error?.message || error);
+    if (!isMembership) {
+      try {
+        bookingAccess = await ensureBookingAccessCredential(booking);
+      } catch (error) {
+        console.error("booking access credential generation failed:", error?.message || error);
+      }
     }
 
     await TempBooking.deleteOne({ _id: claimedTemp._id });
@@ -213,7 +291,7 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
       );
     }
 
-    return { success: true, data: booking };
+    return { success: true, data: isMembership ? { booking, planPurchase } : booking };
   } catch (error) {
     console.error("finalizeTempBooking error:", error);
     if (claimedTemp?._id) {

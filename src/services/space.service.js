@@ -1195,6 +1195,7 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       PricingPlan.find({
         space: spaceId,
       })
+        .populate("assignedResources.resource", "name type capacity images isActive")
         .lean()
         .exec(),
 

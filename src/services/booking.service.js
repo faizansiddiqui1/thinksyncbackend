@@ -67,6 +67,10 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       addons = [],
       couponCode: rawCouponCode,
     } = bookingData;
+    const purchaseIntent =
+      bookingData.purchaseIntent === "PLAN_MEMBERSHIP"
+        ? "PLAN_MEMBERSHIP"
+        : "BOOKING";
 
     let dbUser = null;
 
@@ -104,20 +108,23 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     } = await resolveCheckoutItems({
       spaceId,
       bookingType: bookingData.bookingType || plan?.type || "daily",
-      resources,
-      addons,
+      resources: purchaseIntent === "PLAN_MEMBERSHIP" ? [] : resources,
+      addons: purchaseIntent === "PLAN_MEMBERSHIP" ? [] : addons,
     });
-    for (const resource of normalizedResources) {
-      const availability = await Booking.checkAvailability(
-        resource.resourceId,
-        new Date(startDateTime),
-        new Date(endDateTime),
-      );
-      if (!availability.available) {
-        return {
-          success: false,
-          error: `${resource.name || "Selected resource"} is no longer available`,
-        };
+
+    if (purchaseIntent !== "PLAN_MEMBERSHIP") {
+      for (const resource of normalizedResources) {
+        const availability = await Booking.checkAvailability(
+          resource.resourceId,
+          new Date(startDateTime),
+          new Date(endDateTime),
+        );
+        if (!availability.available) {
+          return {
+            success: false,
+            error: `${resource.name || "Selected resource"} is no longer available`,
+          };
+        }
       }
     }
 
@@ -137,6 +144,7 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       addons: normalizedAddons,
       startDateTime,
       endDateTime,
+      purchaseIntent,
     };
 
     const booking = await Booking.create({
@@ -161,6 +169,11 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       endDateTime,
       timezone: bookingData.timezone || "Asia/Kolkata",
       specialRequests: bookingData.specialRequests || "",
+      purchaseIntent,
+      notes:
+        purchaseIntent === "PLAN_MEMBERSHIP"
+          ? "Membership plan purchase checkout"
+          : bookingData.notes || "",
       status: "draft",
       payment: {
         method: bookingData?.payment?.method || "upi",
@@ -373,6 +386,7 @@ function getBookingSnapshot(booking) {
     endDateTime: booking.endDateTime,
     timezone: booking.timezone,
     specialRequests: booking.specialRequests,
+    purchaseIntent: booking.purchaseIntent || "BOOKING",
     payment: { method: booking.payment?.method || "upi" },
     totalAmount: booking.priceBreakdown?.totalAmount || 0,
   };
@@ -689,6 +703,7 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
         type: getInternalPlanType(bookingType),
       },
       bookingType,
+      reservationType: "INTERNAL_BOOKING",
       bookingDuration: {
         startDate: bookingData?.bookingDuration?.startDate || startDateTime,
         endDate: bookingData?.bookingDuration?.endDate || endDateTime,
@@ -1097,7 +1112,10 @@ export const getMyBookings = async (userId, filters = {}) => {
   try {
     const { status, upcoming, past, page = 1, limit = 20 } = filters;
 
-    const query = { "user.userId": userId };
+    const query = {
+      "user.userId": userId,
+      purchaseIntent: { $ne: "PLAN_MEMBERSHIP" },
+    };
 
     if (status) query.status = status;
     if (upcoming) query.startDateTime = { $gte: new Date() };

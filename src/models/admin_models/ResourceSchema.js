@@ -45,6 +45,9 @@ const resourceSchema = new Schema(
       enum: [
         "meeting_room",
         "private_cabin",
+        "hot_desk",
+        "dedicated_desk",
+        "event_space",
         "conference_room",
         "lounge",
         "open_space",

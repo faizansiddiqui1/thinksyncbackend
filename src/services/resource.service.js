@@ -10,6 +10,7 @@ import {
 } from "../config/s3.js";
 import {
   ensureSpaceAccess,
+  assertPlainAdminShortTermLeasingSpace,
   getOwnedSpaceIds,
   isSuperAdminUser,
   getActorUserId,
@@ -51,20 +52,55 @@ const ensureResourceAccess = async (resourceId, user) => {
 const getImageUrl = ({ bucketName, region, key }) =>
   publicUrlForKey({ bucketName, region, key });
 
+async function hydrateResourceImages(resourceOrResources, tenant = null) {
+  const isArrayInput = Array.isArray(resourceOrResources);
+  const resources = isArrayInput ? resourceOrResources : [resourceOrResources].filter(Boolean);
+
+  const hydrated = await Promise.all(
+    resources.map(async (resource) => {
+      const target = typeof resource?.toObject === "function" ? resource.toObject() : { ...resource };
+
+      if (!Array.isArray(target.images)) return target;
+
+      return {
+        ...target,
+        images: await Promise.all(
+          target.images.map(async (image) => {
+            if (!image?.s3Key) return image;
+            const previewUrl = await createSignedGetUrl({
+              tenant,
+              key: image.s3Key,
+              expiresSeconds: 3600,
+            }).catch(() => image.previewUrl || "");
+
+            return {
+              ...image,
+              previewUrl: previewUrl || image.previewUrl || image.url || "",
+            };
+          }),
+        ),
+      };
+    }),
+  );
+
+  return isArrayInput ? hydrated : hydrated[0] || null;
+}
+
 export async function createResourceForSpace(
   spaceId,
   data,
   user = null,
   tenant = null,
 ) {
-  await ensureSpaceAccess(spaceId, user);
+  const space = await ensureSpaceAccess(spaceId, user);
+  assertPlainAdminShortTermLeasingSpace(space, user, "Resources");
 
   const payload = { ...data, space: spaceId };
   const resource = await Resource.create(payload);
   return resource;
 }
 
-export async function getAllResources(user) {
+export async function getAllResources(user, tenant = null) {
   const query = {};
 
   if (!isSuperAdminUser(user)) {
@@ -76,10 +112,13 @@ export async function getAllResources(user) {
     query.space = { $in: spaceIds };
   }
 
-  return Resource.find(query)
+  const resources = await Resource.find(query)
     .populate("space", "name slug owner address status isPublished")
     .sort({ createdAt: -1 })
+    .lean()
     .exec();
+
+  return hydrateResourceImages(resources, tenant);
 }
 
 export const addResourceImage = async (
@@ -92,6 +131,12 @@ export const addResourceImage = async (
 
   if (!imageData?.key) {
     throw new Error("Image key is required");
+  }
+
+  if ((resource.images || []).length >= 5) {
+    const err = new Error("Maximum 5 images allowed per resource");
+    err.status = 400;
+    throw err;
   }
 
   const aws = await resolveAwsConfig(tenant);
@@ -145,6 +190,12 @@ export async function deleteResourceImage(
     throw err;
   }
 
+  if ((resource.images || []).length <= 1) {
+    const err = new Error("At least 1 image is required for every resource");
+    err.status = 400;
+    throw err;
+  }
+
   if (image.s3Key) {
     try {
       await deleteFromStorage({ tenant, key: image.s3Key });
@@ -159,26 +210,27 @@ export async function deleteResourceImage(
   return { imageId };
 }
 
-export async function getResourcesBySpace(spaceId, opts = {}, user = null) {
+export async function getResourcesBySpace(spaceId, opts = {}, user = null, tenant = null) {
   await ensureSpaceAccess(spaceId, user);
 
   const query = { space: spaceId };
   if (opts.activeOnly) query.isActive = true;
 
-  const q = Resource.find(query).populate("space", "name slug");
+  const q = Resource.find(query).populate("space", "name slug").lean();
   if (opts.select) q.select(opts.select);
   if (opts.sort) q.sort(opts.sort);
   if (opts.limit) q.limit(opts.limit);
   if (opts.skip) q.skip(opts.skip);
 
-  return q.exec();
+  const resources = await q.exec();
+  return hydrateResourceImages(resources, tenant);
 }
 
-export async function getResourceById(resourceId, user = null) {
+export async function getResourceById(resourceId, user = null, tenant = null) {
   const r = await Resource.findById(resourceId).populate(
     "space",
     "name slug owner address status isPublished",
-  );
+  ).lean();
   if (!r) {
     const err = new Error("Resource not found");
     err.status = 404;
@@ -189,7 +241,7 @@ export async function getResourceById(resourceId, user = null) {
     await ensureSpaceAccess(r.space?._id || r.space, user);
   }
 
-  return r;
+  return hydrateResourceImages(r, tenant);
 }
 
 export async function updateResource(

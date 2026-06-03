@@ -294,6 +294,33 @@ export const publishSpaceController = async (req, res) => {
       });
     }
 
+    const normalizedType = String(space.spaceType || "").toLowerCase();
+    const requiresResources =
+      normalizedType === "cowork_space" ||
+      normalizedType === "coworking_space";
+
+    if (requiresResources) {
+      const resources = await Resource.find({ space: space._id }).select("name images").lean();
+
+      if (!resources.length) {
+        return res.status(400).json({
+          message: "Add at least 1 resource before publishing.",
+        });
+      }
+
+      const resourceWithoutImage = resources.find(
+        (resource) =>
+          !Array.isArray(resource.images) ||
+          !resource.images.some((image) => image?.url || image?.s3Key),
+      );
+
+      if (resourceWithoutImage) {
+        return res.status(400).json({
+          message: `${resourceWithoutImage.name || "Resource"} needs at least 1 image before publishing.`,
+        });
+      }
+    }
+
     space.status = "PUBLISHED";
     space.isPublished = true;
 

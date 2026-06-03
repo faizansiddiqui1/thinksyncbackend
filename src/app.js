@@ -16,6 +16,7 @@ import smtpRoutes from "./routes/smtp.routes.js";
 import propertyRoutes from "./routes/space.routes.js"; // spaces
 import spaceMediaRoutes from "./routes/spaceMedia.routes.js";
 import pricingPlanRoutes from "./routes/pricing.routes.js";
+import planMembershipRoutes from "./routes/planMembership.routes.js";
 import offersPlanRoutes from "./routes/offers.routes.js";
 import resourceRoutes from "./routes/resource.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -162,6 +163,7 @@ app.use("/api", propertyRoutes); // existing file uses /spaces and /space/:slug 
 /* Media, pricing, offers, resources */
 app.use("/api", spaceMediaRoutes);
 app.use("/api", pricingPlanRoutes);
+app.use("/api/plans", planMembershipRoutes);
 app.use("/api", offersPlanRoutes);
 app.use("/api", resourceRoutes);
 

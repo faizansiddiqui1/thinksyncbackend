@@ -10,6 +10,7 @@ import {
 } from "../config/s3.js";
 import {
   ensureSpaceAccess,
+  assertPlainAdminShortTermLeasingSpace,
   getOwnedSpaceIds,
   getActorUserId,
   isSuperAdminUser,
@@ -56,7 +57,8 @@ export async function createAddonForSpace(
   user = null,
   tenant = null,
 ) {
-  await ensureSpaceAccess(spaceId, user);
+  const space = await ensureSpaceAccess(spaceId, user);
+  assertPlainAdminShortTermLeasingSpace(space, user, "Add-ons");
 
   const payload = {
     ...data,
