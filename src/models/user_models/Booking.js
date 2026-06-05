@@ -447,6 +447,46 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    outlookEventId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
+    calendarProvider: {
+      type: String,
+      enum: ["google", "outlook", "multiple", null],
+      default: null,
+      index: true,
+    },
+
+    lastSyncTime: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    calendarSync: {
+      google: {
+        eventId: { type: String, default: null },
+        lastSyncTime: { type: Date, default: null },
+        syncStatus: {
+          type: String,
+          enum: ["pending", "synced", "failed", "deleted", null],
+          default: null,
+        },
+      },
+      outlook: {
+        eventId: { type: String, default: null },
+        lastSyncTime: { type: Date, default: null },
+        syncStatus: {
+          type: String,
+          enum: ["pending", "synced", "failed", "deleted", null],
+          default: null,
+        },
+      },
+    },
+
     /* =========================
        CANCELLATION
     ========================= */

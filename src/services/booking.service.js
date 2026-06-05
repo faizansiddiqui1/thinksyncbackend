@@ -11,7 +11,10 @@ import {
   hasCompanySpaceAccess,
 } from "./spaceAccess.service.js";
 import mongoose from "mongoose";
-import * as googleCalendarService from "./googleCalendar.service.js";
+import {
+  deleteBookingFromConnectedCalendars,
+  syncBookingToConnectedCalendars,
+} from "./calendarSync.service.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import Resource from "../models/admin_models/ResourceSchema.js";
 import Addon from "../models/admin_models/AddonSchema.js";
@@ -744,14 +747,14 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       "internal booking confirmation email failed:",
     );
 
-    // create calendar event for internal bookings if user has connected google
+    // create calendar events for internal bookings if user has connected a provider
     try {
       const userId = authUser._id;
       if (userId) {
-        await googleCalendarService.createEventForBooking(booking._id, userId);
+        await syncBookingToConnectedCalendars(booking._id, userId);
       }
     } catch (err) {
-      console.error("google calendar create failed for internal booking:", err?.message || err);
+      console.error("calendar create failed for internal booking:", err?.message || err);
     }
 
     let bookingAccess = null;
@@ -1267,6 +1270,14 @@ export const cancelMyBooking = async (userId, bookingId, reason = "") => {
     await booking.save();
 
     try {
+      if (booking.googleEventId || booking.outlookEventId) {
+        await deleteBookingFromConnectedCalendars(booking._id, userId);
+      }
+    } catch (err) {
+      console.error("calendar delete failed for user cancellation:", err?.message || err);
+    }
+
+    try {
       await ensureBookingAccessCredential(booking);
     } catch (err) {
       console.error("cancel booking access sync failed:", err?.message || err);
@@ -1351,14 +1362,14 @@ export const updateBookingStatus = async (id, status, notes = "") => {
     }
 
     await booking.save();
-    // sync update to google calendar if exists
+    // sync update to connected calendars if events exist
     try {
       const userId = booking.user?.userId || null;
-      if (userId && booking.googleEventId) {
-        await googleCalendarService.updateEventForBooking(booking._id, userId);
+      if (userId && (booking.googleEventId || booking.outlookEventId)) {
+        await syncBookingToConnectedCalendars(booking._id, userId);
       }
     } catch (err) {
-      console.error("google calendar update failed:", err?.message || err);
+      console.error("calendar update failed:", err?.message || err);
     }
     return { success: true, data: booking };
   } catch (error) {
@@ -1407,14 +1418,14 @@ export const cancelBooking = async (id, cancelledBy, reason = "") => {
     }
 
     await booking.save();
-    // delete calendar event if present
+    // delete calendar events if present
     try {
       const userId = booking.user?.userId || null;
-      if (userId && booking.googleEventId) {
-        await googleCalendarService.deleteEventForBooking(booking._id, userId);
+      if (userId && (booking.googleEventId || booking.outlookEventId)) {
+        await deleteBookingFromConnectedCalendars(booking._id, userId);
       }
     } catch (err) {
-      console.error("google calendar delete failed:", err?.message || err);
+      console.error("calendar delete failed:", err?.message || err);
     }
 
     return { success: true, data: booking, refundAmount };
@@ -1516,14 +1527,10 @@ export const updatePaymentStatus = async (id, paymentData) => {
     try {
       const userId = booking.user?.userId || null;
       if (userId) {
-        if (booking.googleEventId) {
-          await googleCalendarService.updateEventForBooking(booking._id, userId);
-        } else if (booking.status === "confirmed") {
-          await googleCalendarService.createEventForBooking(booking._id, userId);
-        }
+        await syncBookingToConnectedCalendars(booking._id, userId);
       }
     } catch (err) {
-      console.error("google calendar sync after payment failed:", err?.message || err);
+      console.error("calendar sync after payment failed:", err?.message || err);
     }
     return { success: true, data: booking };
   } catch (error) {

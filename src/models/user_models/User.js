@@ -205,6 +205,36 @@ const userSchema = new Schema(
       type: [RefreshTokenSchema],
       select: false,
     },
+
+    outlookConnected: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    outlookAccessToken: {
+      type: String,
+      select: false,
+    },
+
+    outlookRefreshToken: {
+      type: String,
+      select: false,
+    },
+
+    outlookEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: "",
+    },
+
+    calendarProvider: {
+      type: String,
+      enum: ["google", "outlook", "multiple", null],
+      default: null,
+      index: true,
+    },
     
     lastLogin: Date,
     otpHash: String,

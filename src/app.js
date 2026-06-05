@@ -33,6 +33,7 @@ import onboardingRoutes from "./routes/company.routes.js"
 import virtualOfficeRoutes from "./routes/virtualOfficePlan.routes.js"
 import eventSpaceRoutes from "./routes/eventSpace.routes.js"
 import googleAuthRoutes from "./routes/googleAuth.routes.js";
+import outlookAuthRoutes from "./routes/outlookAuth.routes.js";
 
 import CityRoutes from "./routes/City.routes.js"
 
@@ -152,6 +153,8 @@ app.use("/api/payout", BookingRoutes);
 
 // Google OAuth
 app.use("/api/auth", googleAuthRoutes);
+app.use("/api/auth", outlookAuthRoutes);
+app.use("/api", outlookAuthRoutes);
 
 
 

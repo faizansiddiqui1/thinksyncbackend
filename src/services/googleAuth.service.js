@@ -1,5 +1,8 @@
 import { google } from "googleapis";
 import GoogleToken from "../models/user_models/GoogleToken.js";
+import OutlookToken from "../models/user_models/OutlookToken.js";
+import User from "../models/user_models/User.js";
+import { decryptToken, encryptToken } from "./calendarTokenCrypto.service.js";
 
 const REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI ||
@@ -50,24 +53,37 @@ export async function saveTokensForUser(userId, tokens) {
 
   const existing = await GoogleToken.findOne({ userId });
   if (existing) {
-    existing.accessToken = tokens.access_token || existing.accessToken;
-    existing.refreshToken = tokens.refresh_token || existing.refreshToken;
+    existing.accessToken = tokens.access_token
+      ? encryptToken(tokens.access_token)
+      : existing.accessToken;
+    existing.refreshToken = tokens.refresh_token
+      ? encryptToken(tokens.refresh_token)
+      : existing.refreshToken;
     existing.scope = tokens.scope || existing.scope;
     existing.tokenType = tokens.token_type || existing.tokenType;
     existing.expiryDate = tokens.expiry_date
       ? new Date(tokens.expiry_date)
       : existing.expiryDate;
     await existing.save();
+    const hasOutlook = Boolean(await OutlookToken.exists({ userId }));
+    await User.findByIdAndUpdate(userId, {
+      $set: { calendarProvider: hasOutlook ? "multiple" : "google" },
+    });
     return existing;
   }
 
   const doc = await GoogleToken.create({
     userId,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
+    accessToken: encryptToken(tokens.access_token),
+    refreshToken: encryptToken(tokens.refresh_token),
     scope: tokens.scope,
     tokenType: tokens.token_type,
     expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined,
+  });
+
+  const hasOutlook = Boolean(await OutlookToken.exists({ userId }));
+  await User.findByIdAndUpdate(userId, {
+    $set: { calendarProvider: hasOutlook ? "multiple" : "google" },
   });
 
   return doc;
@@ -83,7 +99,7 @@ export async function disconnectGoogleCalendar(userId) {
   const tokens = await GoogleToken.findOne({ userId });
   if (!tokens) return false;
 
-  const tokenToRevoke = tokens.refreshToken || tokens.accessToken;
+  const tokenToRevoke = decryptToken(tokens.refreshToken || tokens.accessToken);
   if (tokenToRevoke) {
     try {
       const oAuth2Client = getOAuthClient();
@@ -94,14 +110,18 @@ export async function disconnectGoogleCalendar(userId) {
   }
 
   await GoogleToken.deleteOne({ _id: tokens._id });
+  const hasOutlook = Boolean(await OutlookToken.exists({ userId }));
+  await User.findByIdAndUpdate(userId, hasOutlook
+    ? { $set: { calendarProvider: "outlook" } }
+    : { $unset: { calendarProvider: "" } });
   return true;
 }
 
 export async function refreshAccessTokenIfNeeded(tokens) {
   const oAuth2Client = getOAuthClient();
   oAuth2Client.setCredentials({
-    access_token: tokens.accessToken,
-    refresh_token: tokens.refreshToken,
+    access_token: decryptToken(tokens.accessToken),
+    refresh_token: decryptToken(tokens.refreshToken),
     expiry_date: tokens.expiryDate
       ? new Date(tokens.expiryDate).getTime()
       : null,
@@ -110,7 +130,7 @@ export async function refreshAccessTokenIfNeeded(tokens) {
   try {
     const res = await oAuth2Client.getAccessToken();
     if (res && res.token) {
-      return { accessToken: res.token };
+      return { accessToken: encryptToken(res.token) };
     }
   } catch (err) {
     // ignore

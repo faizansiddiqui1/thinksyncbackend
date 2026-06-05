@@ -16,8 +16,7 @@ import { isNewDevice } from "../utils/helper.js";
 import { sendNewDeviceLoginAlert } from "./alert.service.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
-import * as googleCalendarService from "./googleCalendar.service.js";
-import Booking from "../models/user_models/Booking.js";
+import { syncAllActiveBookingsForUser } from "./calendarSync.service.js";
 import { normalizeUsername } from "../utils/usernameUtils.js";
 
 async function getAuthRuntimeConfig() {
@@ -222,23 +221,11 @@ const issueOtp = async (user, target, isMail, tenant) => {
   user.otpAttempts = 0;
   await user.save();
 
-  // Employee login sync: if user has google tokens, sync upcoming bookings
+  // Employee login sync: keep connected calendar providers current.
   try {
-    const tokens = await (await import("../models/user_models/GoogleToken.js")).default.findOne({ userId: user._id });
-    if (tokens) {
-      const upcoming = await Booking.find({ "user.userId": user._id, status: "confirmed", startDateTime: { $gte: new Date() } });
-      for (const b of upcoming) {
-        if (!b.googleEventId) {
-          try {
-            await googleCalendarService.createEventForBooking(b._id, user._id);
-          } catch (err) {
-            console.error("employee booking sync failed:", err?.message || err);
-          }
-        }
-      }
-    }
+    await syncAllActiveBookingsForUser(user._id);
   } catch (err) {
-    console.error("employee google sync error:", err?.message || err);
+    console.error("employee calendar sync error:", err?.message || err);
   }
 
   if (isMail) {

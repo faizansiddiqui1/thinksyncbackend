@@ -1,7 +1,7 @@
 import Booking from "../models/user_models/Booking.js";
 import TempBooking from "../models/user_models/TempBooking.js";
 import { redeemOffer } from "./offer.service.js";
-import * as googleCalendarService from "./googleCalendar.service.js";
+import { syncBookingToConnectedCalendars } from "./calendarSync.service.js";
 import {
   sendBookingConfirmationEmail,
   sendShortTermBookingAccessEmail,
@@ -266,11 +266,11 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
     if (!isMembership) {
       try {
         const userId = booking.user?.userId || null;
-        if (userId && !booking.googleEventId) {
-          await googleCalendarService.createEventForBooking(booking._id, userId);
+        if (userId) {
+          await syncBookingToConnectedCalendars(booking._id, userId);
         }
       } catch (error) {
-        console.error("google calendar create failed:", error?.message || error);
+        console.error("calendar create failed:", error?.message || error);
       }
     }
 

@@ -1,5 +1,6 @@
 import * as googleAuthService from "../../services/googleAuth.service.js";
 import { requireAuth } from "../../middlewares/auth.js";
+import { syncAllActiveBookingsForUser } from "../../services/calendarSync.service.js";
 
 export const getGoogleAuthUrl = async (req, res) => {
   try {
@@ -26,10 +27,11 @@ export const googleCallback = async (req, res) => {
     }
 
     await googleAuthService.saveTokensForUser(userId, tokens);
+    await syncAllActiveBookingsForUser(userId);
 
     // redirect to frontend or show success
     const redirect = process.env.FRONTEND_URL || "http://localhost:4028";
-    return res.redirect(`${redirect}/?google_connected=1`);
+    return res.redirect(`${redirect}/dashboard?google_connected=1`);
   } catch (err) {
     console.error("google callback error", err);
     return res.status(500).send("Google callback failed");
