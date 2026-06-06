@@ -52,9 +52,12 @@ import compareRoutes from "./routes/compare.routes.js";
 import visitRequestRoutes from "./routes/visitRequest.routes.js";
 import consultantRoutes from "./routes/consultant.routes.js";
 import marketplaceContentRoutes from "./routes/marketplaceContent.routes.js";
+import docsRoutes from "./routes/docs.routes.js";
 import { ensureDefaultEmailTemplates } from "./services/emailTemplateRegistry.service.js";
 import { startBookingCompletionCron } from "./cron/bookingCompletion.cron.js";
 import { ensureGlobalKycConfig } from "./services/globalKycConfig.service.js";
+import { ensureDefaultDocumentation } from "./services/documentationSeed.service.js";
+import { ensureSuperAdminUser } from "./services/superAdminSeed.service.js";
 
 import { cashfreeWebhook } from "./controllers/user_controllers/cashfreeWebhook.controller.js";
 
@@ -205,6 +208,7 @@ app.use("/api/compare", compareRoutes);
 app.use("/api/visit-requests", visitRequestRoutes);
 app.use("/api", consultantRoutes);
 app.use("/api", marketplaceContentRoutes);
+app.use("/api", docsRoutes);
 
 // Vertual office documetns
 app.use("/api/documents", DocumentsRoutes)
@@ -232,6 +236,12 @@ const PORT = parseInt(process.env.PORT, 10) || 5000;
 
 async function startServer() {
   await connectDB();
+  const superAdmin = await ensureSuperAdminUser();
+  console.log(
+    superAdmin.created
+      ? `Super admin created: ${superAdmin.email}`
+      : `Super admin ready: ${superAdmin.email}`,
+  );
   const globalKyc = await ensureGlobalKycConfig();
   console.log(
     globalKyc.created
@@ -239,6 +249,17 @@ async function startServer() {
       : "Global KYC config ready",
   );
   await ensureDefaultEmailTemplates();
+  await ensureDefaultDocumentation()
+    .then((docsSeed) => {
+      console.log(
+        docsSeed.created
+          ? `Documentation seed created ${docsSeed.documentsCreated} docs`
+          : "Documentation seed ready",
+      );
+    })
+    .catch((error) => {
+      console.error("Documentation seed failed:", error.message);
+    });
   startBookingCompletionCron();
 
   const server = app.listen(PORT, () => {
