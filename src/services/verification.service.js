@@ -18,9 +18,12 @@ import {
   ensureField,
   getOrCreate,
 } from "../controllers/admin_controllers/verification.controller.js";
-import AdminProfile from "../models/admin_models/AdminProfile.js";
 import CompanyVerification from "../models/admin_models/CompanyVerification.js";
 import { getGlobalKycConfig } from "./globalKycConfig.service.js";
+import {
+  evaluateKycRequirements,
+  syncAdminKycApproval,
+} from "./kycApproval.service.js";
 
 const FormDataNode =
   FormDataPkg && FormDataPkg.default ? FormDataPkg.default : FormDataPkg;
@@ -44,11 +47,6 @@ function getS3Client(aws) {
 
   s3ClientCache.set(cacheKey, client);
   return client;
-}
-
-async function isFaceMatchRequired() {
-  const config = await getGlobalKycConfig();
-  return config.requireFaceMatch === true;
 }
 
 // helper to decide verified flag from provider response
@@ -107,85 +105,69 @@ function isPanDocumentVerified(pan) {
   );
 }
 
-// User KYC approval requires Aadhaar and PAN. Face matching is an optional
-// workflow step and is evaluated separately where it is explicitly enabled.
 export async function getFinalKycStatus(user) {
-  const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const panOk = isPanDocumentVerified(user?.kyc?.pan);
+  const [config, companyVerification] = await Promise.all([
+    getGlobalKycConfig(),
+    CompanyVerification.findOne({ userId: user?._id }).lean(),
+  ]);
 
-  if (!aadhaarOk && !panOk) return "not_submitted";
-  if (!aadhaarOk || !panOk) return "pending";
-
-  return "approved";
-}
-
-export function getUserKycDecision(user) {
-  const aadhaarOk = user?.kyc?.aadhaar?.ocr?.verified === true;
-  const panOk = isPanDocumentVerified(user?.kyc?.pan);
-
-  if (!user?.kyc?.aadhaar) return "not_submitted";
-  if (!aadhaarOk || !panOk) return "pending";
-
-  return "approved";
+  return evaluateKycRequirements({
+    config,
+    companyVerification,
+    user,
+  }).status;
 }
 
 export async function buildUserKycPayload(userId) {
-  const [user, admin, cvRaw] = await Promise.all([
+  const [user, cvRaw, config] = await Promise.all([
     User.findById(userId).lean(),
-    AdminProfile.findOne({ owner: userId }).lean(),
     CompanyVerification.findOne({ userId }).lean(),
+    getGlobalKycConfig(),
   ]);
 
   const cv = cvRaw || {};
 
   if (!user) throw new Error("User not found");
 
-  const requireFaceMatch = admin?.kyc?.config?.requireFaceMatch === true;
-  const aadhaarVerified = user?.kyc?.aadhaar?.ocr?.verified === true;
-
   const panVerified =
     isPanDocumentVerified(cv?.pan) || isPanDocumentVerified(user?.kyc?.pan);
-
-  const persistedUserStatus =
-    aadhaarVerified && panVerified ? "approved" : aadhaarVerified || panVerified ? "pending" : "not_submitted";
   const repair = {};
   if (panVerified && user?.kyc?.pan?.status !== "verified") {
     repair["kyc.pan.status"] = "verified";
-  }
-  if (user?.kyc?.status !== persistedUserStatus) {
-    repair["kyc.status"] = persistedUserStatus;
   }
   if (Object.keys(repair).length) {
     await User.updateOne({ _id: userId }, { $set: repair });
   }
 
-  const faceVerified =
-    !requireFaceMatch || user?.kyc?.faceMatch?.matched === true;
-
-  let status = "not_submitted";
-  if (!user?.kyc?.aadhaar && !panVerified) status = "not_submitted";
-  else if (!aadhaarVerified || !panVerified) status = "pending";
-  else if (requireFaceMatch && !faceVerified) status = "awaiting_selfie";
-  else status = "verified";
+  const decision = evaluateKycRequirements({
+    config,
+    companyVerification: cv,
+    user,
+  });
+  const status =
+    decision.status === "approved"
+      ? "verified"
+      : decision.pendingChecks.length === 1 &&
+          decision.pendingChecks[0] === "faceMatch"
+        ? "awaiting_selfie"
+        : "pending";
 
   return {
     status,
-    config: {
-      requireAadhaar: true,
-      requirePan: true,
-      requireFaceMatch,
-    },
+    config: decision.config,
     details: {
-      aadhaar: user?.kyc?.aadhaar ?? {},
+      aadhaar: cv?.aadhaar ?? user?.kyc?.aadhaar ?? {},
       selfie: user?.kyc?.selfie || {},
       faceMatch: user?.kyc?.faceMatch || {},
       pan: cv?.pan ?? user?.kyc?.pan ?? {},
+      companyPan: cv?.companyPan || {},
+      gst: cv?.gst || {},
+      cin: cv?.cin || {},
+      bank: cv?.bank || {},
     },
-    checks: {
-      aadhaarVerified,
-      panVerified,
-      faceVerified,
-    },
+    checks: decision.checks,
+    requiredChecks: decision.requiredChecks,
+    pendingChecks: decision.pendingChecks,
   };
 }
 
@@ -573,6 +555,7 @@ export const saveKycImage = async (userId, body, tenant) => {
 
   user.kyc.status = await getFinalKycStatus(user);
   await user.save();
+  await syncAdminKycApproval(userId);
 
   return user.kyc[type];
 };

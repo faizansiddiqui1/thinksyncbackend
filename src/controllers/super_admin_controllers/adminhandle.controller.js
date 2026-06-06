@@ -3,6 +3,7 @@ import {
   ensureGlobalKycConfig,
   updateGlobalKycConfig as saveGlobalKycConfig,
 } from "../../services/globalKycConfig.service.js";
+import { reconcileAdminKycApprovals } from "../../services/kycApproval.service.js";
 
 // Update specific admin config by admin id = user._id
 export async function updateKycConfig(req, res) {
@@ -48,12 +49,13 @@ export async function getGlobalKycConfig(req, res) {
 export async function createGlobalKycConfig(req, res) {
   try {
     const state = await saveGlobalKycConfig(req.body || {});
+    const reconciliation = await reconcileAdminKycApprovals();
     return res.status(state.created ? 201 : 200).json({
       success: true,
       message: state.created
         ? "Global KYC config created"
         : "Global KYC config already existed and was updated",
-      data: state,
+      data: { ...state, reconciliation },
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -64,10 +66,11 @@ export async function createGlobalKycConfig(req, res) {
 export async function updateGlobalKycConfig(req, res) {
   try {
     const state = await saveGlobalKycConfig(req.body || {});
+    const reconciliation = await reconcileAdminKycApprovals();
     return res.json({
       success: true,
       message: "Global KYC config updated",
-      data: state,
+      data: { ...state, reconciliation },
     });
   } catch (err) {
     return res.status(500).json({
@@ -81,10 +84,11 @@ export async function updateGlobalKycConfig(req, res) {
 export async function updateDefaultKycConfig(req, res) {
   try {
     const state = await saveGlobalKycConfig(req.body || {});
+    const reconciliation = await reconcileAdminKycApprovals();
     return res.json({
       success: true,
       message: "Default config updated",
-      data: state,
+      data: { ...state, reconciliation },
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

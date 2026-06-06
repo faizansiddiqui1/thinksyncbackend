@@ -6,6 +6,10 @@ import { ApiError } from "../../utils/apiResponse.js";
 
 import Company from "../../models/super_admin_models/Company.model.js";
 import { getGlobalKycConfig as getStoredGlobalKycConfig } from "../../services/globalKycConfig.service.js";
+import {
+  evaluateKycRequirements,
+  syncAdminKycApproval,
+} from "../../services/kycApproval.service.js";
 
 /** ensure nested object exists */
 export function ensureField(obj, field) {
@@ -38,19 +42,6 @@ async function getSelfHealingGlobalKycConfig() {
   return getStoredGlobalKycConfig();
 }
 
-async function getGlobalKycConfig() {
-  const global = await AdminProfile.findOne({
-    "company.name": "GLOBAL_DEFAULT",
-  }).lean();
-
-  if (!global?.kyc?.config) {
-    console.log("⚠️ Global config missing");
-    return {};
-  }
-
-  return global.kyc.config;
-}
-
 export async function getAdminKycStatusHandler(req, res) {
   try {
     let user = await User.findById(req.user._id).populate({
@@ -58,8 +49,8 @@ export async function getAdminKycStatusHandler(req, res) {
       select: "name permissions",
     });
 
-    const cv = await CompanyVerification.findOne({ userId: user._id });
-    const adminProfile = await AdminProfile.findOne({ owner: user._id });
+    let cv = await CompanyVerification.findOne({ userId: user._id });
+    let adminProfile = await AdminProfile.findOne({ owner: user._id });
 
     const companyRecord = user.companyId
       ? await Company.findById(user.companyId).populate([
@@ -106,6 +97,10 @@ export async function getAdminKycStatusHandler(req, res) {
 
     const rawConfig = await getSelfHealingGlobalKycConfig();
     const config = normalizeConfig(rawConfig);
+    const approval = await syncAdminKycApproval(user._id);
+    user = approval.user;
+    cv = approval.companyVerification;
+    adminProfile = approval.adminProfile;
 
     const userKycStatus = await svc.buildUserKycPayload(user._id);
     const ownerAdminProfile =
@@ -180,9 +175,18 @@ export async function getAdminKycStatusHandler(req, res) {
 
       customRoles: user.customRoles || [],
       config,
-      details: cv || {},
+      details: {
+        ...(cv?.toObject?.() || cv || {}),
+        pan: cv?.pan || user?.kyc?.pan || {},
+        aadhaar: cv?.aadhaar || user?.kyc?.aadhaar || {},
+        selfie: user?.kyc?.selfie || {},
+        faceMatch: user?.kyc?.faceMatch || {},
+      },
       reviewedAt: adminProfile?.kyc?.reviewedAt || null,
       userKycStatus,
+      checks: approval.checks,
+      requiredChecks: approval.requiredChecks,
+      pendingChecks: approval.pendingChecks,
     };
 
     if (!adminProfile) {
@@ -192,17 +196,9 @@ export async function getAdminKycStatusHandler(req, res) {
       });
     }
 
-    const decision = getAdminKycDecision(cv, config, user);
-
-    if (decision === "approved" && user.role !== "admin") {
-      user.role = "admin";
-      user.kyc.status = "approved";
-      await user.save();
-    }
-
     return res.json({
       ...baseResponse,
-      status: decision,
+      status: approval.status,
     });
   } catch (err) {
     return res.status(500).json({
@@ -231,61 +227,15 @@ export async function getUserKycStatusForAdmin(req, res) {
 }
 
 export function getAdminKycDecision(companyVerification, config = {}, user) {
-  if (!companyVerification) return "pending";
-
-  const checks = [];
-
-  if (config.requirePan) {
-    checks.push(companyVerification?.pan?.status === "verified");
-  }
-
-  if (config.requireCompanyPan) {
-    checks.push(companyVerification?.companyPan?.status === "verified");
-  }
-
-  if (config.requireAadhaar || config.requireFaceMatch) {
-    checks.push(companyVerification?.aadhaar?.status === "verified");
-  }
-
-  if (config.requireBankCheack) {
-    checks.push(companyVerification?.bank?.status === "verified");
-  }
-
-  if (config.requireGstin) {
-    checks.push(companyVerification?.gst?.status === "verified");
-  }
-
-  if (config.requireCin) {
-    checks.push(companyVerification?.cin?.status === "verified");
-  }
-
-  if (checks.includes(false)) return "pending";
-
-  return "approved";
+  return evaluateKycRequirements({
+    config,
+    companyVerification,
+    user,
+  }).status;
 }
 
 export async function updateAdminKyc(userId) {
-  const cv = await CompanyVerification.findOne({ userId });
-  const adminProfile = await AdminProfile.findOne({ owner: userId });
-
-  if (!adminProfile) return;
-
-  const rawConfig = await getSelfHealingGlobalKycConfig();
-  const config = normalizeConfig(rawConfig);
-
-  const user = await User.findById(userId).lean();
-  const decision = getAdminKycDecision(cv, config, user);
-
-  adminProfile.kyc.status = decision;
-  adminProfile.kyc.reviewedAt = new Date();
-  await adminProfile.save();
-
-  const u = await User.findById(userId);
-  if (u) {
-    u.role = decision === "approved" ? "admin" : "pending_admin";
-    u.kyc.status = decision === "approved" ? "approved" : "pending";
-    await u.save();
-  }
+  return syncAdminKycApproval(userId);
 }
 
 /** get or create verification row */
@@ -321,6 +271,7 @@ export async function verifyPanHandler(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.pan?.status === "verified" && v.pan?.data?.pan === pan) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Your PAN already verified",
@@ -386,6 +337,7 @@ export async function verifyPanForUser(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.pan?.status === "verified" && v.pan?.data?.pan === pan) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "PAN already verified for target user",
@@ -461,6 +413,7 @@ export async function verifyCompanyPanHandler(req, res, next) {
       existingCompanyPan &&
       String(existingCompanyPan).toUpperCase() === panInput
     ) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Company PAN already verified",
@@ -512,6 +465,7 @@ export async function verifyCompanyPanForUser(req, res, next) {
       existingCompanyPan &&
       String(existingCompanyPan).toUpperCase() === panInput
     ) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Company PAN already verified for user",
@@ -555,6 +509,7 @@ export async function verifyGstHandler(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.gst?.status === "verified" && v.gst?.data?.GSTIN === gstin) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Your GST already verified",
@@ -604,6 +559,7 @@ export async function verifyGstForUser(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.gst?.status === "verified" && v.gst?.data?.GSTIN === gstin) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "GST already verified for target user",
@@ -654,6 +610,7 @@ export async function verifyCinHandler(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.cin?.status === "verified" && v.cin?.data?.cin === cin) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Your CIN already verified",
@@ -703,6 +660,7 @@ export async function verifyCinForUser(req, res, next) {
     const v = await getOrCreate(userId);
 
     if (v.cin?.status === "verified" && v.cin?.data?.cin === cin) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "CIN already verified for target user",
@@ -850,6 +808,7 @@ export async function verifyBankSyncHandler(req, res, next) {
       v.bank?.account === bank_account &&
       v.bank?.ifsc === ifsc
     ) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Your bank already verified",
@@ -903,6 +862,7 @@ export async function verifyBankSyncForUser(req, res, next) {
       v.bank?.account === bank_account &&
       v.bank?.ifsc === ifsc
     ) {
+      await updateAdminKyc(userId);
       return res.json({
         success: true,
         message: "Bank already verified for target user",

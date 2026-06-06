@@ -10,7 +10,6 @@ export const DEFAULT_GLOBAL_KYC_CONFIG = Object.freeze({
   requireCompanyPan: false,
   requireFaceMatch: false,
   requireBankCheack: false,
-  requireVideoKyc: false,
 });
 
 const CONFIG_KEYS = Object.keys(DEFAULT_GLOBAL_KYC_CONFIG);
@@ -41,7 +40,10 @@ function sanitizeGlobalKycUpdate(update = {}) {
 }
 
 function hasConfigChanged(current = {}, normalized = {}) {
-  return CONFIG_KEYS.some((key) => current?.[key] !== normalized[key]);
+  return (
+    Object.hasOwn(current || {}, "requireVideoKyc") ||
+    CONFIG_KEYS.some((key) => current?.[key] !== normalized[key])
+  );
 }
 
 export async function ensureGlobalKycConfig() {

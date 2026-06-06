@@ -46,6 +46,13 @@ const KycSchema = new Schema(
       s3Key: String,
       uploadedAt: Date,
     },
+    faceMatch: {
+      raw: Schema.Types.Mixed,
+      matched: { type: Boolean, default: false },
+      score: Number,
+      processedAt: Date,
+      error: String,
+    },
     pan: {
       status: {
         type: String,

@@ -25,7 +25,6 @@ const KycConfigSchema = new Schema(
     requireCompanyPan: { type: Boolean, default: false },
     requireFaceMatch: { type: Boolean, default: false },
     requireBankCheack: { type: Boolean, default: false },
-    requireVideoKyc: { type: Boolean, default: false },
   },
   { _id: false },
 );

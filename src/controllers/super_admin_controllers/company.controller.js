@@ -1,6 +1,7 @@
 import Company from "../../models/super_admin_models/Company.model.js";
 import Space from "../../models/admin_models/Space.js";
 import User from "../../models/user_models/User.js";
+import AdminProfile from "../../models/admin_models/AdminProfile.js";
 
 export const createCompany = async (req, res) => {
   try {
@@ -83,6 +84,16 @@ export const createCompany = async (req, res) => {
     // 🔥 STEP 3: link user → company
     user.companyId = company._id;
     await user.save();
+    await AdminProfile.findOneAndUpdate(
+      { owner: user._id },
+      {
+        $setOnInsert: {
+          owner: user._id,
+          "kyc.status": "not_submitted",
+        },
+      },
+      { upsert: true, new: true },
+    );
 
     // 🔥 RESPONSE
     return res.status(201).json({
