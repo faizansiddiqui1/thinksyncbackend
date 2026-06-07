@@ -7,7 +7,7 @@ const visitRequestSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      default: null,
       index: true,
     },
     listingId: {
@@ -88,4 +88,3 @@ visitRequestSchema.index({ ownerId: 1, createdAt: -1 });
 
 export default mongoose.models.VisitRequest ||
   mongoose.model("VisitRequest", visitRequestSchema);
-

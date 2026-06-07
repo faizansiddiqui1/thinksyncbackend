@@ -6,6 +6,7 @@ import {
   updateVisitRequestStatus,
 } from "../controllers/user_controllers/visitRequest.controller.js";
 import {
+  optionalAuth,
   requireAdminAccess,
   requireAuth,
   requirePermission,
@@ -13,7 +14,7 @@ import {
 
 const router = express.Router();
 
-router.post("/", requireAuth, createVisitRequest);
+router.post("/", optionalAuth, createVisitRequest);
 router.get("/me", requireAuth, getMyVisitRequests);
 
 router.get(
@@ -33,4 +34,3 @@ router.patch(
 );
 
 export default router;
-

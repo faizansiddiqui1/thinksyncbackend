@@ -115,21 +115,23 @@ export async function createVisitRequest(req, res) {
       });
     }
 
-    const alreadySaved = await SavedSpace.exists({
-      userId: req.user._id,
-      listingId,
-    });
-
-    if (!alreadySaved) {
-      await SavedSpace.create({
+    if (req.user?._id) {
+      const alreadySaved = await SavedSpace.exists({
         userId: req.user._id,
         listingId,
-        category,
       });
+
+      if (!alreadySaved) {
+        await SavedSpace.create({
+          userId: req.user._id,
+          listingId,
+          category,
+        });
+      }
     }
 
     const visit = await VisitRequest.create({
-      userId: req.user._id,
+      userId: req.user?._id || null,
       listingId,
       ownerId: space.owner || null,
       category,
@@ -323,4 +325,3 @@ export async function updateVisitRequestStatus(req, res) {
     });
   }
 }
-
