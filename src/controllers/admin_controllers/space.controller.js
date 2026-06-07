@@ -295,9 +295,13 @@ export const publishSpaceController = async (req, res) => {
     }
 
     const normalizedType = String(space.spaceType || "").toLowerCase();
+    const isLongTerm =
+      space.listingModes?.longTerm === true ||
+      String(space.leasingType || "").toLowerCase() === "long_term";
     const requiresResources =
-      normalizedType === "cowork_space" ||
-      normalizedType === "coworking_space";
+      (normalizedType === "cowork_space" ||
+        normalizedType === "coworking_space") &&
+      !isLongTerm;
 
     if (requiresResources) {
       const resources = await Resource.find({ space: space._id }).select("name images").lean();

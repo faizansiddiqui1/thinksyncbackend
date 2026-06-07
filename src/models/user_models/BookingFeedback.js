@@ -13,7 +13,6 @@ const bookingFeedbackSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
       required: true,
-      index: true,
     },
 
     easeRating: {

@@ -26,7 +26,6 @@ const compareSessionSchema = new Schema(
     expiresAt: {
       type: Date,
       default: () => new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
-      index: true,
     },
   },
   {
@@ -38,4 +37,3 @@ compareSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export default mongoose.models.CompareSession ||
   mongoose.model("CompareSession", compareSessionSchema);
-
