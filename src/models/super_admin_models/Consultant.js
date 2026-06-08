@@ -45,6 +45,31 @@ const publicProfileSchema = new Schema(
   { _id: false },
 );
 
+const leadRoutingSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: true, index: true },
+    receiveNewLeads: { type: Boolean, default: true, index: true },
+    strategy: {
+      type: String,
+      enum: ["round_robin", "weighted", "manual"],
+      default: "round_robin",
+    },
+    weight: { type: Number, min: 0.1, default: 1 },
+    maxDailyLeads: { type: Number, min: 1, default: null },
+  },
+  { _id: false },
+);
+
+const routingStatsSchema = new Schema(
+  {
+    totalAssigned: { type: Number, min: 0, default: 0 },
+    dailyAssignedCount: { type: Number, min: 0, default: 0 },
+    dailyAssignedDate: { type: Date, default: null },
+    lastAssignedAt: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
 const consultantSchema = new Schema(
   {
     linkedUser: {
@@ -112,6 +137,22 @@ const consultantSchema = new Schema(
       type: [String],
       default: [],
       index: true,
+    },
+
+    assignedListingModes: {
+      type: [String],
+      default: [],
+      index: true,
+    },
+
+    leadRouting: {
+      type: leadRoutingSchema,
+      default: () => ({}),
+    },
+
+    routingStats: {
+      type: routingStatsSchema,
+      default: () => ({}),
     },
 
     priority: {
@@ -198,6 +239,10 @@ consultantSchema.pre("save", function (next) {
 
   this.assignedSpaceTypes = (this.assignedSpaceTypes || [])
     .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+
+  this.assignedListingModes = (this.assignedListingModes || [])
+    .map((value) => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_"))
     .filter(Boolean);
 
   next();

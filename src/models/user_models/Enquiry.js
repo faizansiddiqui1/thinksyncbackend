@@ -110,6 +110,28 @@ const enquirySchema = new Schema(
       index: true,
     },
 
+    listingMode: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      index: true,
+    },
+
+    addonId: {
+      type: Schema.Types.ObjectId,
+      ref: "Addon",
+      default: null,
+      index: true,
+    },
+
+    serviceName: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true,
+    },
+
     city: {
       type: String,
       trim: true,
@@ -207,16 +229,70 @@ const enquirySchema = new Schema(
 
     leadSource: {
       type: String,
-      enum: [
-        "website",
-        "landing_request_callback",
-        "whatsapp",
-        "call",
-        "manual",
-        "ads",
-        "other",
-      ],
+      trim: true,
+      lowercase: true,
       default: "website",
+      index: true,
+    },
+
+    leadCategory: {
+      type: String,
+      enum: ["workspace", "addon_service", "landing_page", "service", "other"],
+      default: "workspace",
+      index: true,
+    },
+
+    ownerUserId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
+    workspaceTeamUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+
+    recipientUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+
+    assignmentMethod: {
+      type: String,
+      enum: [
+        "automated_listing",
+        "automated_exact",
+        "automated_city_fallback",
+        "automated_global_fallback",
+        "manual",
+        "admin_only",
+        "owner_distribution",
+        "unassigned",
+      ],
+      default: "unassigned",
+      index: true,
+    },
+
+    assignmentConfidence: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    assignmentScore: {
+      type: Number,
+      default: null,
+    },
+
+    lastActivityAt: {
+      type: Date,
+      default: Date.now,
       index: true,
     },
 
@@ -279,6 +355,7 @@ const enquirySchema = new Schema(
         consultant: { type: Schema.Types.ObjectId, ref: "Consultant", default: null },
         previousConsultant: { type: Schema.Types.ObjectId, ref: "Consultant", default: null },
         assignedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        method: { type: String, trim: true, default: "" },
         reason: { type: String, trim: true, default: "" },
         assignedAt: { type: Date, default: Date.now },
       },
@@ -328,6 +405,9 @@ enquirySchema.index({ spaceId: 1, status: 1, createdAt: -1 });
 enquirySchema.index({ resourceId: 1, status: 1, createdAt: -1 });
 enquirySchema.index({ consultantId: 1, status: 1, createdAt: -1 });
 enquirySchema.index({ city: 1, product: 1, status: 1, createdAt: -1 });
+enquirySchema.index({ city: 1, product: 1, listingMode: 1, createdAt: -1 });
+enquirySchema.index({ leadCategory: 1, ownerUserId: 1, createdAt: -1 });
+enquirySchema.index({ recipientUserIds: 1, leadCategory: 1, createdAt: -1 });
 enquirySchema.index({ listingId: 1, createdAt: -1 });
 enquirySchema.index({ email: 1, createdAt: -1 });
 enquirySchema.index({ phoneNumber: 1, createdAt: -1 });
@@ -342,11 +422,16 @@ enquirySchema.pre("save", function (next) {
   if (this.budget) this.budget = this.budget.trim();
   if (this.listingName) this.listingName = this.listingName.trim();
   if (this.listingSlug) this.listingSlug = this.listingSlug.trim().toLowerCase();
+  if (this.listingMode) {
+    this.listingMode = this.listingMode.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  }
+  if (this.serviceName) this.serviceName = this.serviceName.trim();
   if (this.city) this.city = this.city.trim();
   if (this.product) this.product = this.product.trim().toLowerCase();
   if (this.spaceType) this.spaceType = this.spaceType.trim().toLowerCase();
   if (this.pageType) this.pageType = this.pageType.trim();
   if (this.sourceUrl) this.sourceUrl = this.sourceUrl.trim();
+  if (this.leadSource) this.leadSource = this.leadSource.trim().toLowerCase();
   next();
 });
 

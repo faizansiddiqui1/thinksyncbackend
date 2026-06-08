@@ -186,6 +186,16 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     description: "Formatted end date and time.",
     sample: "26 May 2026, 01:00 PM",
   },
+  bookingStatus: {
+    label: "Booking status",
+    description: "Current booking workflow status.",
+    sample: "Confirmed",
+  },
+  companyName: {
+    label: "Company name",
+    description: "Customer or recipient company name.",
+    sample: "Example Company",
+  },
   paymentAmount: {
     label: "Payment amount",
     description: "Formatted booking amount.",
@@ -241,6 +251,36 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     description: "Requested workspace product or service.",
     sample: "Private Office",
   },
+  leadName: {
+    label: "Lead name",
+    description: "Lead contact name.",
+    sample: "Lead Contact",
+  },
+  leadCity: {
+    label: "Lead city",
+    description: "City resolved for the lead.",
+    sample: "Mumbai",
+  },
+  leadProduct: {
+    label: "Lead product",
+    description: "Workspace product resolved for the lead.",
+    sample: "Coworking Space",
+  },
+  leadListingMode: {
+    label: "Lead listing mode",
+    description: "Long-term or short-term listing mode resolved for the lead.",
+    sample: "Long Term",
+  },
+  consultantName: {
+    label: "Consultant name",
+    description: "Assigned consultant display name.",
+    sample: "Workspace Consultant",
+  },
+  tourDate: {
+    label: "Tour date",
+    description: "Scheduled workspace tour date.",
+    sample: "28 May 2026",
+  },
   reviewLink: {
     label: "Review link",
     description: "Direct link to submit a review.",
@@ -255,6 +295,11 @@ export const EMAIL_TEMPLATE_VARIABLES = {
     label: "Dashboard link",
     description: "Dashboard landing URL.",
     sample: "https://app.example.com/dashboard",
+  },
+  unsubscribeLink: {
+    label: "Unsubscribe link",
+    description: "Recipient-specific marketing email unsubscribe link.",
+    sample: "https://api.example.com/email-tracking/unsubscribe/token",
   },
   resetLink: {
     label: "Reset link",
@@ -1106,6 +1151,8 @@ export async function ensureDefaultEmailTemplates() {
         {
           $setOnInsert: {
             ...definition,
+            visibility: "system",
+            ownerRole: "system",
             html: sanitizeTemplateHtml(definition.html),
           },
         },

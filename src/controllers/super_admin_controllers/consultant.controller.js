@@ -6,6 +6,7 @@ import Consultant, {
 import City from "../../models/super_admin_models/City.model.js";
 import ConsultantEditRequest from "../../models/super_admin_models/ConsultantEditRequest.js";
 import LeadEmailTemplate from "../../models/super_admin_models/LeadEmailTemplate.js";
+import EmailTemplate from "../../models/super_admin_models/EmailTemplate.js";
 import Enquiry from "../../models/user_models/Enquiry.js";
 import User from "../../models/user_models/User.js";
 import {
@@ -50,6 +51,12 @@ function cleanArray(value) {
       .filter(Boolean);
   }
   return [];
+}
+
+function cleanBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["true", "1", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
 function cleanTemplateCategory(value) {
@@ -122,12 +129,17 @@ function getAccessibleTemplateFilter(req, { activeOnly = false } = {}) {
 
   if (activeOnly) filter.isActive = true;
 
-  if (!isSuperAdmin) {
-    filter.$or = [
-      { visibility: "shared", isActive: true },
-      { createdBy: req.user?._id || null, visibility: "consultant" },
-    ];
-  }
+  filter.$or = isSuperAdmin
+    ? [
+        { templateType: "system" },
+        { createdBy: req.user?._id || null },
+      ]
+    : [
+        {
+          templateType: { $ne: "system" },
+          createdBy: req.user?._id || null,
+        },
+      ];
 
   return filter;
 }
@@ -249,6 +261,32 @@ function normalizeConsultantPayload(body = {}, userId = null) {
     assignedCities: cleanArray(body.assignedCities || body.cities),
     assignedProductTypes: cleanArray(body.assignedProductTypes || body.productTypes),
     assignedSpaceTypes: cleanArray(body.assignedSpaceTypes || body.spaceTypes),
+    assignedListingModes: cleanArray(
+      body.assignedListingModes || body.listingModes,
+    ).map((value) => value.toLowerCase().replace(/[\s-]+/g, "_")),
+    leadRouting: {
+      enabled: cleanBoolean(
+        body.leadRouting?.enabled ?? body.leadRoutingEnabled,
+        true,
+      ),
+      receiveNewLeads: cleanBoolean(
+        body.leadRouting?.receiveNewLeads ?? body.receiveNewLeads,
+        true,
+      ),
+      strategy: ["round_robin", "weighted", "manual"].includes(
+        cleanText(body.leadRouting?.strategy || body.routingStrategy),
+      )
+        ? cleanText(body.leadRouting?.strategy || body.routingStrategy)
+        : "round_robin",
+      weight: Math.max(
+        0.1,
+        Number(body.leadRouting?.weight ?? body.routingWeight ?? 1) || 1,
+      ),
+      maxDailyLeads:
+        Number(body.leadRouting?.maxDailyLeads ?? body.maxDailyLeads) > 0
+          ? Number(body.leadRouting?.maxDailyLeads ?? body.maxDailyLeads)
+          : null,
+    },
     priority: Number.isFinite(Number(body.priority)) ? Number(body.priority) : 100,
     notes: cleanText(body.notes),
     visibilityRules: {
@@ -326,6 +364,9 @@ function normalizeLeadFilter(query = {}, user = null, consultant = null) {
   if (query.city) filter.city = { $regex: String(query.city), $options: "i" };
   if (query.product) filter.product = String(query.product);
   if (query.source) filter.source = query.source;
+  if (query.leadSource) filter.leadSource = query.leadSource;
+  if (query.leadCategory) filter.leadCategory = query.leadCategory;
+  if (query.listingMode) filter.listingMode = query.listingMode;
 
   if (query.dateFrom || query.dateTo) {
     filter.createdAt = {};
@@ -709,10 +750,36 @@ export const getLeadDistribution = async (req, res) => {
   try {
     const baseFilter = normalizeLeadFilter(req.query);
 
-    const [byConsultant, byCity, byProduct, byStatus, recentLeads] = await Promise.all([
+    const [
+      total,
+      assigned,
+      converted,
+      byConsultant,
+      byCity,
+      byProduct,
+      byStatus,
+      bySource,
+      recentLeads,
+    ] = await Promise.all([
+      Enquiry.countDocuments(baseFilter),
+      Enquiry.countDocuments({ ...baseFilter, consultantId: { $ne: null } }),
+      Enquiry.countDocuments({
+        ...baseFilter,
+        status: { $in: ["converted", "closed"] },
+      }),
       Enquiry.aggregate([
         { $match: baseFilter },
-        { $group: { _id: "$consultantId", count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: "$consultantId",
+            count: { $sum: 1 },
+            converted: {
+              $sum: {
+                $cond: [{ $in: ["$status", ["converted", "closed"]] }, 1, 0],
+              },
+            },
+          },
+        },
         { $sort: { count: -1 } },
       ]),
       Enquiry.aggregate([
@@ -730,6 +797,19 @@ export const getLeadDistribution = async (req, res) => {
         { $group: { _id: "$status", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
       ]),
+      Enquiry.aggregate([
+        { $match: baseFilter },
+        {
+          $group: {
+            _id: {
+              category: "$leadCategory",
+              source: "$leadSource",
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
       Enquiry.find(baseFilter)
         .populate("consultantId", "name email phone designation")
         .sort({ createdAt: -1 })
@@ -740,10 +820,23 @@ export const getLeadDistribution = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        byConsultant,
+        total,
+        assigned,
+        unassigned: Math.max(0, total - assigned),
+        converted,
+        conversionRate: total
+          ? Number(((converted / total) * 100).toFixed(1))
+          : 0,
+        byConsultant: byConsultant.map((item) => ({
+          ...item,
+          conversionRate: item.count
+            ? Number(((item.converted / item.count) * 100).toFixed(1))
+            : 0,
+        })),
         byCity,
         byProduct,
         byStatus,
+        bySource,
         recentLeads,
         statuses: LEAD_STATUSES,
       },
@@ -918,20 +1011,51 @@ export const listConsultantLeads = async (req, res) => {
 
 export const listLeadEmailTemplates = async (req, res) => {
   try {
-    const filter = getAccessibleTemplateFilter(req, {
+    const legacyFilter = getAccessibleTemplateFilter(req, {
       activeOnly: req.query.active === "true",
     });
 
     if (req.query.category) {
-      filter.category = cleanTemplateCategory(req.query.category);
+      legacyFilter.category = cleanTemplateCategory(req.query.category);
     }
 
     if (req.query.templateType) {
-      filter.templateType = req.query.templateType === "system" ? "system" : "custom";
+      legacyFilter.templateType = req.query.templateType === "system" ? "system" : "custom";
     }
 
-    const templates = await LeadEmailTemplate.find(filter).sort({ updatedAt: -1 }).lean();
-    return res.json({ success: true, data: templates });
+    const centralFilter = {};
+    if (req.query.active === "true") centralFilter.isActive = true;
+    centralFilter.$or =
+      req.user?.role === "super_admin"
+        ? [
+            { isSystem: true },
+            { createdBy: req.user?._id || null },
+          ]
+        : [
+            {
+              isSystem: { $ne: true },
+              createdBy: req.user?._id || null,
+            },
+          ];
+
+    const [legacyTemplates, centralTemplates] = await Promise.all([
+      LeadEmailTemplate.find(legacyFilter).sort({ updatedAt: -1 }).lean(),
+      EmailTemplate.find(centralFilter).sort({ isSystem: -1, updatedAt: -1 }).lean(),
+    ]);
+
+    const centralRows = centralTemplates.map((template) => ({
+      ...template,
+      name: template.displayName || template.name,
+      body: template.html,
+      templateType: template.isSystem ? "system" : "custom",
+      visibility: template.isSystem ? "shared" : template.visibility,
+      source: "email_template",
+    }));
+
+    return res.json({
+      success: true,
+      data: [...centralRows, ...legacyTemplates],
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -953,7 +1077,10 @@ export const createLeadEmailTemplate = async (req, res) => {
 
 export const updateLeadEmailTemplate = async (req, res) => {
   try {
-    const existing = await LeadEmailTemplate.findById(req.params.id);
+    const existing = await LeadEmailTemplate.findOne({
+      _id: req.params.id,
+      ...getAccessibleTemplateFilter(req),
+    });
 
     if (!existing) {
       return res.status(404).json({ success: false, message: "Template not found" });
@@ -967,19 +1094,9 @@ export const updateLeadEmailTemplate = async (req, res) => {
         existing.visibility === "consultant";
 
       if (!ownsTemplate) {
-        const cloned = await LeadEmailTemplate.create({
-          ...payload,
-          visibility: "consultant",
-          templateType: "custom",
-          sourceTemplate: existing._id,
-          createdBy: req.user?._id || null,
-          updatedBy: req.user?._id || null,
-        });
-
-        return res.status(201).json({
-          success: true,
-          message: "Custom template copy created",
-          data: cloned,
+        return res.status(403).json({
+          success: false,
+          message: "You can edit only your own custom templates",
         });
       }
     }
@@ -995,7 +1112,10 @@ export const updateLeadEmailTemplate = async (req, res) => {
 
 export const deleteLeadEmailTemplate = async (req, res) => {
   try {
-    const template = await LeadEmailTemplate.findById(req.params.id);
+    const template = await LeadEmailTemplate.findOne({
+      _id: req.params.id,
+      ...getAccessibleTemplateFilter(req),
+    });
 
     if (!template) {
       return res.status(404).json({ success: false, message: "Template not found" });

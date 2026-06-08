@@ -12,22 +12,31 @@ import {
   updateEnquiryStatus,
 } from "../controllers/user_controllers/enquiry.controller.js";
 
-import { optionalAuth, requireAuth } from "../middlewares/auth.js";
-import { requireRole, requireSuperAdmin } from "../middlewares/superadmin.js";
+import {
+  optionalAuth,
+  requireAdminAccess,
+  requireAuth,
+} from "../middlewares/auth.js";
+import { requireSuperAdmin } from "../middlewares/superadmin.js";
 
 const router = express.Router();
+
+const requireLeadOperator = (req, res, next) => {
+  if (req.user?.role === "consultant") return next();
+  return requireAdminAccess(req, res, next);
+};
 
 // Public form submit - anyone can create enquiry, logged-in users are enriched when token exists.
 router.post("/", optionalAuth, createEnquiry);
 
-// Super admin only
-router.get("/", requireAuth, requireSuperAdmin, getAllEnquiries);
-router.post("/bulk-email", requireAuth, requireRole("super_admin", "consultant"), sendLeadEmails);
-router.get("/:id", requireAuth, requireSuperAdmin, getEnquiryById);
-router.patch("/:id/status", requireAuth, requireRole("super_admin", "consultant"), updateEnquiryStatus);
+// Super admins see all leads. Owner/admin users are scoped to their spaces and recipients.
+router.get("/", requireAuth, requireAdminAccess, getAllEnquiries);
+router.post("/bulk-email", requireAuth, requireLeadOperator, sendLeadEmails);
+router.get("/:id", requireAuth, requireAdminAccess, getEnquiryById);
+router.patch("/:id/status", requireAuth, requireLeadOperator, updateEnquiryStatus);
 router.patch("/:id/assign", requireAuth, requireSuperAdmin, assignEnquiryConsultant);
-router.post("/:id/notes", requireAuth, requireRole("super_admin", "consultant"), addEnquiryNote);
-router.post("/:id/call-logs", requireAuth, requireRole("super_admin", "consultant"), addCallLog);
+router.post("/:id/notes", requireAuth, requireLeadOperator, addEnquiryNote);
+router.post("/:id/call-logs", requireAuth, requireLeadOperator, addCallLog);
 router.delete("/:id", requireAuth, requireSuperAdmin, deleteEnquiry);
 
 export default router;

@@ -3,14 +3,27 @@ import mongoose from "mongoose";
 
 import Enquiry from "../../models/user_models/Enquiry.js";
 import AdminProfile from "../../models/admin_models/AdminProfile.js";
+import Addon from "../../models/admin_models/AddonSchema.js";
+import Space from "../../models/admin_models/Space.js";
 import Consultant from "../../models/super_admin_models/Consultant.js";
 import LeadEmailTemplate from "../../models/super_admin_models/LeadEmailTemplate.js";
+import EmailTemplate from "../../models/super_admin_models/EmailTemplate.js";
+import Role from "../../models/super_admin_models/Role.js";
+import User from "../../models/user_models/User.js";
 import sendEmailWithFallback from "../../utils/sendEmailWithFallback.js";
 import { sendEnquiryConfirmationEmail } from "../../services/mail.service.js";
 import {
-  findMatchingConsultant,
+  assignMatchingConsultant,
+  buildRoutingContext,
   getConsultantForUser,
+  normalizeListingMode,
+  releaseConsultantAssignment,
 } from "../../services/consultantRouting.service.js";
+import {
+  getCompanySpaceIds,
+  getScopeOwnerId,
+  isSuperAdminUser,
+} from "../../services/spaceAccess.service.js";
 
 const ALLOWED_STATUSES = [
   "new",
@@ -30,6 +43,14 @@ const cleanOptional = (value) => {
   return value.trim();
 };
 
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 const cleanUtm = (value = {}) => ({
   source: cleanOptional(value.source || value.utm_source),
   medium: cleanOptional(value.medium || value.utm_medium),
@@ -37,6 +58,62 @@ const cleanUtm = (value = {}) => ({
   term: cleanOptional(value.term || value.utm_term),
   content: cleanOptional(value.content || value.utm_content),
 });
+
+const normalizeLeadSource = (value = "") =>
+  String(value || "website").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+const uniqueObjectIds = (values = []) => {
+  const seen = new Set();
+  return values.filter((value) => {
+    if (!value || !mongoose.Types.ObjectId.isValid(String(value))) return false;
+    const key = String(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+async function resolveAddonLead(body = {}) {
+  const addonId = body.addonId || body.serviceId;
+  if (!addonId || !mongoose.Types.ObjectId.isValid(String(addonId))) return null;
+
+  return Addon.findById(addonId)
+    .populate({
+      path: "space",
+      select: "name slug owner spaceType listingModes address",
+      populate: { path: "address.city", select: "name slug" },
+    })
+    .lean();
+}
+
+async function resolveWorkspaceRecipients(space = null) {
+  const ownerUserId = space?.owner || null;
+  if (!ownerUserId) {
+    return {
+      ownerUserId: null,
+      workspaceTeamUserIds: [],
+      recipientUserIds: [],
+    };
+  }
+
+  const roleIds = await Role.find({ createdBy: ownerUserId }).distinct("_id");
+  const workspaceTeam = roleIds.length
+    ? await User.find({
+        customRoles: { $in: roleIds },
+        isActive: true,
+      })
+        .select("_id")
+        .lean()
+    : [];
+
+  const workspaceTeamUserIds = workspaceTeam.map((user) => user._id);
+
+  return {
+    ownerUserId,
+    workspaceTeamUserIds,
+    recipientUserIds: uniqueObjectIds([ownerUserId, ...workspaceTeamUserIds]),
+  };
+}
 
 const getRequestDevice = (req, bodyDevice = {}) => ({
   userAgent: cleanOptional(bodyDevice.userAgent || req.headers["user-agent"]),
@@ -59,6 +136,14 @@ const renderLeadTemplate = (template = "", lead = {}) => {
     listingName: lead.listingName || lead.spaceId?.name || "",
     listing: lead.listingName || lead.spaceId?.name || "",
     consultantName: lead.consultantId?.name || "",
+    leadName: lead.name || "",
+    leadCity: lead.city || "",
+    leadProduct: lead.product || "",
+    leadListingMode: lead.listingMode || "",
+    enquiryId: lead._id || "",
+    enquiryService: lead.serviceName || lead.product || "",
+    userName: lead.name || "",
+    workspaceName: lead.listingName || lead.spaceId?.name || "",
   };
 
   return String(template || "").replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key) => {
@@ -67,38 +152,94 @@ const renderLeadTemplate = (template = "", lead = {}) => {
 };
 
 const buildLeadRoutingPayload = async (req, body = {}) => {
-  const listingId = body.listingId || body.spaceId || null;
-
-  const routed = await findMatchingConsultant(
-    {
-      ...body,
-      listingId,
-      spaceId: body.spaceId || listingId,
-      listingSlug: body.listingSlug,
-      city: body.city,
-      product: body.product || body.productType,
-      spaceType: body.spaceType || body.listingType,
-      pageType: body.pageType,
-      sourceUrl: body.sourceUrl,
-    },
-    { publicView: false },
-  );
+  const addon = await resolveAddonLead(body);
+  const addonSpace = addon?.space || null;
+  const listingId =
+    addonSpace?._id || body.listingId || body.spaceId || null;
+  const leadSource = normalizeLeadSource(body.leadSource);
+  const isLandingLead =
+    leadSource === "landing_request_callback" ||
+    body.pageType === "request_callback";
+  const isAddonServiceLead = addon?.type === "service";
+  const routeToConsultant = !isLandingLead && !isAddonServiceLead;
+  const routingInput = {
+    ...body,
+    listingId,
+    spaceId: listingId,
+    listingSlug: addonSpace?.slug || body.listingSlug,
+    city:
+      addonSpace?.address?.city?._id ||
+      addonSpace?.address?.city?.slug ||
+      body.city,
+    product:
+      addonSpace?.spaceType ||
+      body.product ||
+      body.productType,
+    spaceType: addonSpace?.spaceType || body.spaceType || body.listingType,
+    listingMode: body.listingMode,
+    pageType: body.pageType,
+    sourceUrl: body.sourceUrl,
+  };
+  const routed = routeToConsultant
+    ? await assignMatchingConsultant(routingInput)
+    : {
+        consultantDoc: null,
+        context: await buildRoutingContext(routingInput),
+        match: null,
+      };
 
   const consultantDoc = routed.consultantDoc || null;
   const context = routed.context || {};
+  const listingSpace =
+    addonSpace ||
+    (context.listing?._id
+      ? await Space.findById(context.listing._id)
+          .select("owner name slug spaceType listingModes")
+          .lean()
+      : null);
+  const ownership = await resolveWorkspaceRecipients(listingSpace);
+  const leadCategory = isLandingLead
+    ? "landing_page"
+    : isAddonServiceLead
+      ? "addon_service"
+      : listingId
+        ? "workspace"
+        : "service";
+  const assignmentMethod = isLandingLead
+    ? "admin_only"
+    : isAddonServiceLead
+      ? "owner_distribution"
+      : routed.match?.method || "unassigned";
 
   return {
-    consultantId: consultantDoc?._id || body.consultantId || null,
+    consultantId: consultantDoc?._id || null,
     listingId: context.listing?._id || listingId || null,
     listingName: cleanOptional(
-      context.listing?.name || body.listingName || body.listingTitle || body.spaceName,
+      addonSpace?.name ||
+        context.listing?.name ||
+        body.listingName ||
+        body.listingTitle ||
+        body.spaceName,
     ),
-    listingSlug: cleanOptional(context.listing?.slug || body.listingSlug),
+    listingSlug: cleanOptional(
+      addonSpace?.slug || context.listing?.slug || body.listingSlug,
+    ),
+    listingMode: normalizeListingMode(context.listingMode || body.listingMode),
     city: cleanOptional(context.cityName || body.cityName || body.city),
     product: cleanOptional(context.productType || body.product || body.productType),
     spaceType: cleanOptional(context.spaceType || body.spaceType || body.listingType),
     pageType: cleanOptional(context.pageType || body.pageType || body.sourcePage),
     sourceUrl: cleanOptional(context.sourceUrl || body.sourceUrl || body.sourceURL),
+    addonId: isAddonServiceLead ? addon._id : null,
+    serviceName: isAddonServiceLead ? addon.title : "",
+    leadSource,
+    leadCategory,
+    ...ownership,
+    recipientUserIds: isAddonServiceLead ? ownership.recipientUserIds : [],
+    assignmentMethod,
+    assignmentConfidence: routed.match?.confidence || assignmentMethod,
+    assignmentScore: routed.match?.score ?? null,
+    lastActivityAt: new Date(),
     utm: cleanUtm(body.utm || body),
     device: getRequestDevice(req, body.device || {}),
     assignmentHistory: consultantDoc?._id
@@ -107,6 +248,7 @@ const buildLeadRoutingPayload = async (req, body = {}) => {
             consultant: consultantDoc._id,
             previousConsultant: null,
             assignedBy: null,
+            method: routed.match?.method || "automated_exact",
             reason: routed.match?.confidence || "routing",
             assignedAt: new Date(),
           },
@@ -122,6 +264,11 @@ function buildLeadFilter(query = {}) {
   if (query.city) filter.city = { $regex: String(query.city), $options: "i" };
   if (query.product) filter.product = String(query.product);
   if (query.source) filter.source = query.source;
+  if (query.leadSource) filter.leadSource = query.leadSource;
+  if (query.leadCategory) filter.leadCategory = query.leadCategory;
+  if (query.listingMode) {
+    filter.listingMode = normalizeListingMode(query.listingMode);
+  }
   if (query.consultantId && mongoose.Types.ObjectId.isValid(String(query.consultantId))) {
     filter.consultantId = query.consultantId;
   }
@@ -144,6 +291,44 @@ function buildLeadFilter(query = {}) {
   }
 
   return filter;
+}
+
+function mergeFilters(...filters) {
+  const active = filters.filter((filter) => filter && Object.keys(filter).length);
+  if (!active.length) return {};
+  if (active.length === 1) return active[0];
+  return { $and: active };
+}
+
+async function buildLeadAccessFilter(req) {
+  if (isSuperAdminUser(req.user)) return {};
+
+  const actorId = req.user?._id || null;
+  const companySpaceIds = await getCompanySpaceIds(req.user);
+  const ownerId = await getScopeOwnerId(req.user);
+  let ownedSpaceIds = [];
+
+  if (ownerId) {
+    ownedSpaceIds = await Space.find({ owner: ownerId }).distinct("_id");
+  }
+
+  const spaceIds = uniqueObjectIds([...companySpaceIds, ...ownedSpaceIds]);
+  const access = [];
+
+  if (actorId) access.push({ recipientUserIds: actorId });
+  if (ownerId) access.push({ ownerUserId: ownerId });
+  if (spaceIds.length) access.push({ spaceId: { $in: spaceIds } });
+
+  const ownershipFilter = access.length ? { $or: access } : { _id: null };
+
+  // Admin/company users manage operational marketplace leads only here.
+  // Platform-wide workspace and landing leads remain Super Admin/consultant surfaces.
+  return {
+    $and: [
+      { leadCategory: "addon_service" },
+      ownershipFilter,
+    ],
+  };
 }
 
 function buildBaseLeadPayload({
@@ -170,7 +355,6 @@ function buildBaseLeadPayload({
     resourceId: body.resourceId || null,
     spaceId: spaceId || leadRoutingPayload.listingId || null,
     ...leadRoutingPayload,
-    leadSource: body.leadSource || "website",
     priority: body.priority || "medium",
     status: "new",
   };
@@ -178,7 +362,14 @@ function buildBaseLeadPayload({
 
 async function userCanOperateLead(req, leadId) {
   if (req.user?.role === "super_admin") return true;
-  if (req.user?.role !== "consultant") return false;
+  if (req.user?.role !== "consultant") {
+    const accessFilter = await buildLeadAccessFilter(req);
+    return Boolean(
+      await Enquiry.exists(
+        mergeFilters({ _id: leadId }, accessFilter),
+      ),
+    );
+  }
 
   const consultant = await getConsultantForUser(req.user._id);
   if (!consultant?._id) return false;
@@ -196,8 +387,49 @@ function queueEnquiryConfirmation(enquiry) {
   });
 }
 
+function queueLeadRecipientNotifications(enquiry) {
+  if (
+    enquiry?.leadCategory !== "addon_service" ||
+    !enquiry?.recipientUserIds?.length
+  ) {
+    return;
+  }
+
+  User.find({
+    _id: { $in: enquiry.recipientUserIds },
+    email: { $exists: true, $ne: "" },
+    isActive: true,
+  })
+    .select("email displayName username")
+    .lean()
+    .then((recipients) =>
+      Promise.allSettled(
+        recipients.map((recipient) =>
+          sendEmailWithFallback({
+            to: recipient.email,
+            subject: `New add-on service enquiry: ${enquiry.serviceName || enquiry.listingName}`,
+            html: `
+              <p>Hello ${escapeHtml(recipient.displayName || recipient.username || "Team")},</p>
+              <p>A new add-on service enquiry was submitted for <strong>${escapeHtml(enquiry.listingName || "your workspace")}</strong>.</p>
+              <p><strong>Service:</strong> ${escapeHtml(enquiry.serviceName || "-")}</p>
+              <p><strong>Customer:</strong> ${escapeHtml(enquiry.name || "-")}</p>
+              <p><strong>Email:</strong> ${escapeHtml(enquiry.email || "-")}</p>
+              <p><strong>Phone:</strong> ${escapeHtml(enquiry.phoneNumber || "-")}</p>
+              <p>Open the ThinkSync lead panel to review and follow up.</p>
+            `,
+          }),
+        ),
+      ),
+    )
+    .catch((error) => {
+      console.error("lead recipient notification failed:", error.message);
+    });
+}
+
 // Public create enquiry
 export const createEnquiry = async (req, res) => {
+  let reservedConsultantId = null;
+
   try {
     const authUser = req.user || null;
 
@@ -211,7 +443,15 @@ export const createEnquiry = async (req, res) => {
       spaceId,
     } = req.body;
 
+    if (!authUser && (!name || !email || !phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "name, email and phoneNumber are required",
+      });
+    }
+
     const leadRoutingPayload = await buildLeadRoutingPayload(req, req.body || {});
+    reservedConsultantId = leadRoutingPayload.consultantId || null;
 
     if (authUser) {
       email = authUser.email || email;
@@ -255,18 +495,13 @@ export const createEnquiry = async (req, res) => {
       });
 
       queueEnquiryConfirmation(enquiry);
+      queueLeadRecipientNotifications(enquiry);
+      reservedConsultantId = null;
 
       return res.status(201).json({
         success: true,
         message: "Enquiry created successfully",
         data: enquiry,
-      });
-    }
-
-    if (!name || !email || !phoneNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "name, email and phoneNumber are required",
       });
     }
 
@@ -287,6 +522,8 @@ export const createEnquiry = async (req, res) => {
     });
 
     queueEnquiryConfirmation(enquiry);
+    queueLeadRecipientNotifications(enquiry);
+    reservedConsultantId = null;
 
     return res.status(201).json({
       success: true,
@@ -294,6 +531,9 @@ export const createEnquiry = async (req, res) => {
       data: enquiry,
     });
   } catch (err) {
+    if (reservedConsultantId) {
+      await releaseConsultantAssignment(reservedConsultantId).catch(() => null);
+    }
     return res.status(500).json({
       success: false,
       message: err.message,
@@ -305,7 +545,10 @@ export const createEnquiry = async (req, res) => {
 export const getAllEnquiries = async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    const filter = buildLeadFilter(req.query);
+    const filter = mergeFilters(
+      buildLeadFilter(req.query),
+      await buildLeadAccessFilter(req),
+    );
     const skip = (Number(page) - 1) * Number(limit);
 
     const [items, total] = await Promise.all([
@@ -314,6 +557,9 @@ export const getAllEnquiries = async (req, res) => {
         .populate("submittedByAdminProfile", "company.name company.address whiteLabel.status")
         .populate("consultantId", "name email phone designation profileImage")
         .populate("spaceId", "title name spaceType location slug")
+        .populate("addonId", "title type category")
+        .populate("ownerUserId", "username displayName email phoneNumber")
+        .populate("workspaceTeamUserIds", "username displayName email phoneNumber")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -338,11 +584,19 @@ export const getAllEnquiries = async (req, res) => {
 // Super admin only: get single enquiry
 export const getEnquiryById = async (req, res) => {
   try {
-    const enquiry = await Enquiry.findById(req.params.id)
+    const enquiry = await Enquiry.findOne(
+      mergeFilters(
+        { _id: req.params.id },
+        await buildLeadAccessFilter(req),
+      ),
+    )
       .populate("submittedByUser", "email username phoneNumber role isActive")
       .populate("submittedByAdminProfile", "company.name company.address whiteLabel.status")
       .populate("consultantId", "name email phone designation profileImage")
       .populate("spaceId", "title name spaceType location slug")
+      .populate("addonId", "title type category")
+      .populate("ownerUserId", "username displayName email phoneNumber")
+      .populate("workspaceTeamUserIds", "username displayName email phoneNumber")
       .populate("assignedSpaceId", "title name spaceType location slug")
       .populate("convertedCompanyId", "name type status")
       .populate("assignmentHistory.consultant", "name email")
@@ -406,6 +660,7 @@ export const updateEnquiryStatus = async (req, res) => {
 
     if (status === "contacted") update.contactedAt = new Date();
     if (status === "converted" || status === "closed") update.convertedAt = new Date();
+    update.lastActivityAt = new Date();
 
     const mongoUpdate = Object.keys(push).length
       ? { $set: update, $push: push }
@@ -457,10 +712,14 @@ export const assignEnquiryConsultant = async (req, res) => {
       consultant: consultant._id,
       previousConsultant: existing.consultantId || null,
       assignedBy: req.user?._id || null,
+      method: "manual",
       reason,
       assignedAt: new Date(),
     });
     existing.consultantId = consultant._id;
+    existing.assignmentMethod = "manual";
+    existing.assignmentConfidence = "manual";
+    existing.lastActivityAt = new Date();
 
     await existing.save();
 
@@ -497,6 +756,7 @@ export const addEnquiryNote = async (req, res) => {
       req.params.id,
       {
         $set: { notes: note },
+        $currentDate: { lastActivityAt: true },
         $push: {
           leadNotes: {
             note,
@@ -530,6 +790,7 @@ export const addCallLog = async (req, res) => {
     const enquiry = await Enquiry.findByIdAndUpdate(
       req.params.id,
       {
+        $currentDate: { lastActivityAt: true },
         $push: {
           callLogs: {
             outcome: cleanOptional(req.body.outcome),
@@ -567,23 +828,59 @@ export const sendLeadEmails = async (req, res) => {
     };
 
     if (templateId) {
-      const templateFilter = { _id: templateId };
-
-      if (req.user?.role === "consultant") {
-        templateFilter.$or = [
-          { visibility: "shared", isActive: true },
-          { createdBy: req.user._id, visibility: "consultant" },
-        ];
-      }
+      const templateFilter = {
+        _id: templateId,
+        ...(req.user?.role === "super_admin"
+          ? {
+              $or: [
+                { templateType: "system" },
+                { createdBy: req.user?._id || null },
+              ],
+            }
+          : {
+              templateType: { $ne: "system" },
+              createdBy: req.user?._id || null,
+            }),
+      };
 
       template = await LeadEmailTemplate.findOne(templateFilter).lean();
+
+      if (!template) {
+        const centralFilter = {
+          _id: templateId,
+          isActive: true,
+        };
+        if (req.user?.role === "super_admin") {
+          centralFilter.$or = [
+            { isSystem: true },
+            { createdBy: req.user?._id || null },
+          ];
+        } else {
+          centralFilter.isSystem = { $ne: true };
+          centralFilter.createdBy = req.user?._id || null;
+        }
+        const centralTemplate = await EmailTemplate.findOne(centralFilter).lean();
+        if (centralTemplate) {
+          template = {
+            ...centralTemplate,
+            body: centralTemplate.html,
+          };
+        }
+      }
     }
 
     if (!template?.subject || !template?.body) {
       return res.status(400).json({ success: false, message: "Email template is required" });
     }
 
-    const leads = await Enquiry.find({ _id: { $in: leadIds } })
+    const leads = await Enquiry.find(
+      mergeFilters(
+        { _id: { $in: leadIds } },
+        req.user?.role === "consultant"
+          ? {}
+          : await buildLeadAccessFilter(req),
+      ),
+    )
       .populate("consultantId", "name")
       .lean();
 
@@ -615,6 +912,7 @@ export const sendLeadEmails = async (req, res) => {
       }
 
       await Enquiry.findByIdAndUpdate(lead._id, {
+        $currentDate: { lastActivityAt: true },
         $push: {
           emailLogs: {
             templateId: templateId || null,

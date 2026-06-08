@@ -21,10 +21,15 @@ import {
   updateConsultant,
   updateLeadEmailTemplate,
 } from "../controllers/super_admin_controllers/consultant.controller.js";
-import { requireAuth } from "../middlewares/auth.js";
+import { requireAdminAccess, requireAuth } from "../middlewares/auth.js";
 import { requireRole, requireSuperAdmin } from "../middlewares/superadmin.js";
 
 const router = express.Router();
+
+const requireSharedTemplateAccess = (req, res, next) => {
+  if (req.user?.role === "consultant") return next();
+  return requireAdminAccess(req, res, next);
+};
 
 // Public routing lookup used by listing cards and details pages.
 router.get("/lead-routing/consultant", getAssignedConsultant);
@@ -84,7 +89,7 @@ router.post(
 router.get(
   "/lead-email-templates",
   requireAuth,
-  requireRole("consultant", "super_admin"),
+  requireSharedTemplateAccess,
   listLeadEmailTemplates,
 );
 router.post(
@@ -108,7 +113,7 @@ router.delete(
 router.post(
   "/lead-email-templates/preview",
   requireAuth,
-  requireRole("consultant", "super_admin"),
+  requireSharedTemplateAccess,
   previewLeadEmailTemplate,
 );
 

@@ -66,6 +66,20 @@ const emailTemplateSchema = new Schema(
       default: false,
     },
 
+    visibility: {
+      type: String,
+      enum: ["system", "shared", "private"],
+      default: "private",
+      index: true,
+    },
+
+    ownerRole: {
+      type: String,
+      enum: ["super_admin", "admin", "company_admin", "consultant", "system"],
+      default: "system",
+      index: true,
+    },
+
     allowedVariables: {
       type: [String],
       default: [],
@@ -93,6 +107,7 @@ emailTemplateSchema.index({
   description: "text",
   name: "text",
 });
+emailTemplateSchema.index({ createdBy: 1, visibility: 1, updatedAt: -1 });
 
 export default
   mongoose.models.EmailTemplate ||

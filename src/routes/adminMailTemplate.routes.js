@@ -1,6 +1,5 @@
 import express from "express";
-import { requireAuth } from "../middlewares/auth.js";
-import { requireSuperAdmin } from "../middlewares/superadmin.js";
+import { requireAdminAccess, requireAuth } from "../middlewares/auth.js";
 import {
   createMailTemplate,
   deleteMailTemplate,
@@ -16,7 +15,12 @@ import {
 
 const router = express.Router();
 
-router.use(requireAuth, requireSuperAdmin);
+const requireTemplateAccess = (req, res, next) => {
+  if (req.user?.role === "consultant") return next();
+  return requireAdminAccess(req, res, next);
+};
+
+router.use(requireAuth, requireTemplateAccess);
 
 router.get("/meta", getMailTemplateMeta);
 router.post("/preview", previewMailTemplate);
