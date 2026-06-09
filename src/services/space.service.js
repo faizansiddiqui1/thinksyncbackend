@@ -9,6 +9,12 @@ import City from "../models/super_admin_models/City.model.js";
 import VirtualOfficePlan from "../models/admin_models/VirtualOfficePlan.js";
 import EventSpace from "../models/admin_models/EventSpace.js";
 import SeatingOption from "../models/admin_models/SeatingOption.js";
+import {
+  deleteFromStorage,
+  publicUrlForKey,
+  resolveAwsConfig,
+} from "../config/s3.js";
+import { normalizeOrderedImages } from "../utils/mediaPolicy.js";
 
 import { normalizePagination, metaFor } from "../utils/pagination.js";
 import ResourceSchema from "../models/admin_models/ResourceSchema.js";
@@ -19,6 +25,68 @@ import SpaceDocument from "../models/admin_models/SpaceDocument.js";
 import { getEffectiveDocumentsBySpace } from "./spaceDocument.service.js";
 import Addon from "../models/admin_models/AddonSchema.js";
 import { hasCompanySpaceAccess } from "./spaceAccess.service.js";
+
+const buildAssetUrl = (aws, key, fallbackUrl = "") =>
+  key
+    ? publicUrlForKey({
+        bucketName: aws.bucketName,
+        region: aws.region,
+        key,
+      })
+    : fallbackUrl || "";
+
+const getImageClientId = (image = {}) =>
+  String(image?._id || image?.id || image?.s3Key || image?.url || "").trim();
+
+const hydrateImageCollection = (images = [], aws) =>
+  normalizeOrderedImages((images || []).map((image) => ({ ...image }))).map((image) => ({
+    ...image,
+    id: getImageClientId(image),
+    url: buildAssetUrl(aws, image?.s3Key, image?.url),
+  }));
+
+const hydrateMediaDoc = (media = null, aws) => {
+  if (!media) {
+    return {
+      images: [],
+      video: null,
+    };
+  }
+
+  const next = { ...media };
+  next.images = hydrateImageCollection(next.images || [], aws);
+  next.video = next.video
+    ? {
+        ...next.video,
+        url: buildAssetUrl(aws, next.video?.s3Key, next.video?.url),
+      }
+    : null;
+
+  return next;
+};
+
+const hydrateAddonCollection = (addons = [], aws) =>
+  (addons || []).map((addon) => ({
+    ...addon,
+    images: hydrateImageCollection(addon.images || [], aws),
+  }));
+
+const hydrateSeatingCollection = (options = [], aws) =>
+  (options || []).map((option) => ({
+    ...option,
+    images: hydrateImageCollection(option.images || [], aws),
+  }));
+
+const hydrateResourceCollection = (resources = [], aws) =>
+  (resources || []).map((resource) => ({
+    ...resource,
+    images: hydrateImageCollection(resource.images || [], aws),
+  }));
+
+const getPrimaryImageUrl = (images = []) => {
+  const normalized = normalizeOrderedImages((images || []).map((image) => ({ ...image })));
+  return normalized.find((image) => image?.isPrimary)?.url || normalized[0]?.url || null;
+};
 
 const ALLOWED_FIELDS = [
   "name",
@@ -217,7 +285,7 @@ const buildSeatingSummary = (seats = []) => {
           amount: bestSeat.pricing?.amount ?? null,
           currency: bestSeat.pricing?.currency || "INR",
           unit: bestSeat.pricing?.unit || "per_desk",
-          image: bestSeat.images?.[0]?.url || null,
+          image: getPrimaryImageUrl(bestSeat.images || []) || null,
           availability: bestSeat.availability?.status || null,
           furnishing: bestSeat.furnishing || null,
         }
@@ -250,7 +318,7 @@ const buildResourceSummary = (resources = []) => {
       amount: cheapest.amount,
       unit: cheapest.unit,
       currency: resource.currency || "INR",
-      image: resource.images?.[0]?.url || null,
+      image: getPrimaryImageUrl(resource.images || []) || null,
       capacity: resource.capacity || null,
       bookingRules: resource.bookingRules || null,
       displayOrder: resource.displayOrder ?? 0,
@@ -474,7 +542,11 @@ const buildCardPayload = ({
 
   const images = Array.isArray(media?.images) ? media.images : [];
 
-  const thumbnail = images?.[0]?.url || null;
+  const primaryImage =
+    images.find((image) => image?.isPrimary) ||
+    images[0] ||
+    null;
+  const thumbnail = primaryImage?.url || null;
 
   // =====================================================
   // RESPONSE
@@ -564,7 +636,7 @@ const buildCardPayload = ({
     // MEDIA
     // =====================================================
 
-    images,
+    images: primaryImage ? [primaryImage] : [],
 
     thumbnail,
 
@@ -788,9 +860,66 @@ export const updateSpace = async (id, updateData, userId = null) => {
 // ===================================================
 // Delete Space
 // ===================================================
-export const deleteSpace = async (id) => {
-  const space = await Space.findByIdAndDelete(id).exec();
+export const deleteSpace = async (id, tenant = null) => {
+  const space = await Space.findById(id).lean().exec();
   if (!space) throw new Error("Space not found");
+
+  const [media, resources, addons, seatingOptions, documents] = await Promise.all([
+    SpaceMedia.findOne({ space: id }).lean().exec(),
+    ResourceSchema.find({ space: id }).lean().exec(),
+    Addon.find({ space: id }).lean().exec(),
+    SeatingOption.find({ space: id }).lean().exec(),
+    SpaceDocument.find({ space: id }).lean().exec(),
+  ]);
+
+  const storageKeys = new Set();
+
+  for (const key of (media?.images || []).map((image) => image?.s3Key).filter(Boolean)) {
+    storageKeys.add(key);
+  }
+  if (media?.video?.s3Key) storageKeys.add(media.video.s3Key);
+
+  for (const resource of resources || []) {
+    for (const key of (resource.images || []).map((image) => image?.s3Key).filter(Boolean)) {
+      storageKeys.add(key);
+    }
+  }
+
+  for (const addon of addons || []) {
+    for (const key of (addon.images || []).map((image) => image?.s3Key).filter(Boolean)) {
+      storageKeys.add(key);
+    }
+  }
+
+  for (const option of seatingOptions || []) {
+    for (const key of (option.images || []).map((image) => image?.s3Key).filter(Boolean)) {
+      storageKeys.add(key);
+    }
+  }
+
+  for (const document of documents || []) {
+    if (document?.file?.s3Key) {
+      storageKeys.add(document.file.s3Key);
+    }
+  }
+
+  for (const key of storageKeys) {
+    await deleteFromStorage({ tenant, key });
+  }
+
+  await Promise.all([
+    SpaceMedia.deleteOne({ space: id }),
+    ResourceSchema.deleteMany({ space: id }),
+    Addon.deleteMany({ space: id }),
+    SeatingOption.deleteMany({ space: id }),
+    SpaceDocument.deleteMany({ space: id }),
+    PricingPlan.deleteMany({ space: id }),
+    Offer.deleteMany({ space: id }),
+    VirtualOfficePlan.deleteMany({ space: id }),
+    EventSpace.deleteMany({ space: id }),
+  ]);
+
+  await Space.deleteOne({ _id: id }).exec();
   return space;
 };
 
@@ -945,11 +1074,14 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
 
   const ids = items.map((s) => s._id);
   const cityMap = await buildCityMap(items);
+  const aws = await resolveAwsConfig(null);
 
   const [medias, virtualOfficePlans, eventSpaces, seatingOptions, resources] =
     await Promise.all([
       SpaceMedia.find({ space: { $in: ids } })
-        .select("space images video")
+        .select(
+          "space images.s3Key images.url images.altText images.caption images.order images.isPrimary video.s3Key video.url video.caption video.thumbnail video.mimeType",
+        )
         .lean()
         .exec(),
 
@@ -971,6 +1103,9 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
         space: { $in: ids },
         isActive: true,
       })
+        .select(
+          "space title slug type shortDescription pricing availability furnishing images displayOrder isFeatured isActive",
+        )
         .lean()
         .exec(),
 
@@ -978,17 +1113,22 @@ export const fetchSpacesListing = async (rawQuery = {}) => {
         space: { $in: ids },
         isActive: true,
       })
+        .select(
+          "space name type prices currency capacity bookingRules displayOrder isActive images.s3Key images.url images.order images.isPrimary",
+        )
         .lean()
         .exec(),
     ]);
 
-  const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
+  const mediaMap = new Map(
+    medias.map((m) => [String(m.space), hydrateMediaDoc(m, aws)]),
+  );
   const virtualOfficeMap = groupBySpace(virtualOfficePlans);
   const eventSpaceMap = new Map(
     eventSpaces.map((item) => [String(item.space), item]),
   );
-  const seatingOptionsMap = groupBySpace(seatingOptions);
-  const resourceMap = groupBySpace(resources);
+  const seatingOptionsMap = groupBySpace(hydrateSeatingCollection(seatingOptions, aws));
+  const resourceMap = groupBySpace(hydrateResourceCollection(resources, aws));
 
   const itemsWithData = items.map((space) => {
     const id = String(space._id);
@@ -1075,11 +1215,14 @@ export const fetchSpaceCardsByIds = async (
 
   const ids = items.map((s) => s._id);
   const cityMap = await buildCityMap(items);
+  const aws = await resolveAwsConfig(null);
 
   const [medias, virtualOfficePlans, eventSpaces, seatingOptions, resources] =
     await Promise.all([
       SpaceMedia.find({ space: { $in: ids } })
-        .select("space images video")
+        .select(
+          "space images.s3Key images.url images.altText images.caption images.order images.isPrimary video.s3Key video.url video.caption video.thumbnail video.mimeType",
+        )
         .lean()
         .exec(),
 
@@ -1101,6 +1244,9 @@ export const fetchSpaceCardsByIds = async (
         space: { $in: ids },
         isActive: true,
       })
+        .select(
+          "space title slug type shortDescription pricing availability furnishing images displayOrder isFeatured isActive",
+        )
         .lean()
         .exec(),
 
@@ -1108,17 +1254,22 @@ export const fetchSpaceCardsByIds = async (
         space: { $in: ids },
         isActive: true,
       })
+        .select(
+          "space name type prices currency capacity bookingRules displayOrder isActive images.s3Key images.url images.order images.isPrimary",
+        )
         .lean()
         .exec(),
     ]);
 
-  const mediaMap = new Map(medias.map((m) => [String(m.space), m]));
+  const mediaMap = new Map(
+    medias.map((m) => [String(m.space), hydrateMediaDoc(m, aws)]),
+  );
   const virtualOfficeMap = groupBySpace(virtualOfficePlans);
   const eventSpaceMap = new Map(
     eventSpaces.map((item) => [String(item.space), item]),
   );
-  const seatingOptionsMap = groupBySpace(seatingOptions);
-  const resourceMap = groupBySpace(resources);
+  const seatingOptionsMap = groupBySpace(hydrateSeatingCollection(seatingOptions, aws));
+  const resourceMap = groupBySpace(hydrateResourceCollection(resources, aws));
 
   const cardMap = new Map(
     items.map((space) => {
@@ -1175,6 +1326,7 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       user?.companyId && isCompanyManagedWorkspace
         ? await hasCompanySpaceAccess(user, spaceId)
         : false;
+    const aws = await resolveAwsConfig(null);
 
     const [
       resources,
@@ -1189,6 +1341,10 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       ResourceSchema.find({
         space: spaceId,
       })
+        .sort({
+          displayOrder: 1,
+          createdAt: -1,
+        })
         .lean()
         .exec(),
 
@@ -1256,10 +1412,10 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
 
     const documents = await getEffectiveDocumentsBySpace(spaceId);
 
-    const normalizedMedia = media || {
-      images: [],
-      video: null,
-    };
+    const normalizedMedia = hydrateMediaDoc(media, aws);
+    const normalizedResources = hydrateResourceCollection(resources || [], aws);
+    const normalizedSeatingOptions = hydrateSeatingCollection(seatingOptions || [], aws);
+    const normalizedAddons = hydrateAddonCollection(addons || [], aws);
 
     const pricingPlansSnapshot = pricingPlans.map((p) => ({
       ...p,
@@ -1280,17 +1436,17 @@ export const fetchSpaceDetailsBySlug = async (slug, user = null) => {
       resources:
         isCompanyManagedWorkspace && !hasInternalWorkspaceAccess
           ? []
-          : resources || [],
+          : normalizedResources,
       pricingPlans: pricingPlansSnapshot || [],
       offers: offers || [],
       media: normalizedMedia,
       virtualOfficePlans: groupedVirtualOfficePlans || {},
       eventSpace: eventSpace || null,
-      seatingOptions: seatingOptions || [],
+      seatingOptions: normalizedSeatingOptions,
       addons:
         isCompanyManagedWorkspace && !hasInternalWorkspaceAccess
           ? []
-          : addons || [],
+          : normalizedAddons,
       documents: documents || [],
       workspaceAccess: {
         isCompanyManagedWorkspace,

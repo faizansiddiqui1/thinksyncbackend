@@ -17,10 +17,14 @@ const imageSchema = new Schema(
   {
     url: { type: String },
     s3Key: { type: String },
+    mimeType: { type: String, default: "" },
     altText: { type: String, default: "" },
     caption: { type: String, default: "" },
     order: { type: Number, default: 0 },
     size: Number,
+    width: { type: Number, default: null },
+    height: { type: Number, default: null },
+    isPrimary: { type: Boolean, default: false },
   },
   { _id: true },
 );
@@ -124,5 +128,50 @@ const resourceSchema = new Schema(
 
 resourceSchema.index({ space: 1, isActive: 1 });
 resourceSchema.index({ "prices.hourly": 1 });
+
+resourceSchema.pre("validate", function (next) {
+  const priceTypes = [
+    ["supportsHourly", "hourly", "Hourly"],
+    ["supportsDaily", "daily", "Daily"],
+    ["supportsWeekly", "weekly", "Weekly"],
+    ["supportsMonthly", "monthly", "Monthly"],
+  ];
+
+  const enabled = priceTypes.filter(([flag]) => Boolean(this.bookingRules?.[flag]));
+
+  if (!enabled.length) {
+    return next(new Error("At least one pricing type must be enabled"));
+  }
+
+  for (const [flag, priceKey, label] of priceTypes) {
+    const enabledFlag = Boolean(this.bookingRules?.[flag]);
+    const rawValue = this.prices?.[priceKey];
+
+    if (!enabledFlag) {
+      if (rawValue !== null && rawValue !== undefined && rawValue !== "") {
+        const numericValue = Number(rawValue);
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+          return next(
+            new Error(
+              `${label} price must be empty when ${label.toLowerCase()} pricing is disabled`,
+            ),
+          );
+        }
+      }
+      continue;
+    }
+
+    if (rawValue === "" || rawValue === null || rawValue === undefined) {
+      return next(new Error(`${label} price is required`));
+    }
+
+    const numericValue = Number(rawValue);
+    if (!Number.isFinite(numericValue) || numericValue <= 100) {
+      return next(new Error(`${label} price must be greater than 100`));
+    }
+  }
+
+  return next();
+});
 
 export default mongoose.model("Resource", resourceSchema);

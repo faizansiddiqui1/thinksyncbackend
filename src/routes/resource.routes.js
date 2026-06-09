@@ -28,6 +28,30 @@ router.post(
   controller.addResourceImage,
 );
 
+router.patch(
+  "/resources/:resourceId/images/:imageId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("resources", "update"),
+  controller.updateResourceImageMetadata,
+);
+
+router.put(
+  "/resources/:resourceId/images/reorder",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("resources", "update"),
+  controller.reorderResourceImages,
+);
+
+router.put(
+  "/resources/:resourceId/images/:imageId/primary",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("resources", "update"),
+  controller.setPrimaryResourceImage,
+);
+
 // DELETE single image from resource
 router.delete(
   "/resources/:resourceId/images/:imageId",

@@ -27,6 +27,30 @@ router.post(
   controller.addAddonImage,
 );
 
+router.patch(
+  "/addons/:addonId/images/:imageId",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("addons", "update"),
+  controller.updateAddonImageMetadata,
+);
+
+router.put(
+  "/addons/:addonId/images/reorder",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("addons", "update"),
+  controller.reorderAddonImages,
+);
+
+router.put(
+  "/addons/:addonId/images/:imageId/primary",
+  requireAuth,
+  requireAdminAccess,
+  requirePermission("addons", "update"),
+  controller.setPrimaryAddonImage,
+);
+
 
 // DELETE /addons/:addonId/images/:imageId
 router.delete(

@@ -1,54 +1,192 @@
+import mongoose from "mongoose";
 import Space from "../models/admin_models/Space.js";
 import SpaceMedia from "../models/admin_models/SpaceMedia.js";
-import mongoose from "mongoose";
-import mime from "mime-types";
+import Resource from "../models/admin_models/ResourceSchema.js";
+import SeatingOption from "../models/admin_models/SeatingOption.js";
+import Addon from "../models/admin_models/AddonSchema.js";
+import City from "../models/super_admin_models/City.model.js";
 import {
   createPresignedUpload,
   createSignedGetUrl,
   deleteFromStorage,
+  headStorageObject,
   publicUrlForKey,
   resolveAwsConfig,
 } from "../config/s3.js";
-import SeatingOption from "../models/admin_models/SeatingOption.js";
-import Addon from "../models/admin_models/AddonSchema.js";
-import City from "../models/super_admin_models/City.model.js";
+import {
+  IMAGE_ALLOWED_MIME_TYPES,
+  IMAGE_MAX_BYTES,
+  MEDIA_CACHE_CONTROL,
+  VIDEO_ALLOWED_MIME_TYPES,
+  VIDEO_MAX_BYTES,
+  assertStorageKeyBelongsToPrefix,
+  buildEntityMediaKey,
+  buildSpaceVideoKey,
+  ensureUploadIsAllowed,
+  getEntityMediaPrefix,
+  getSpaceVideoPrefix,
+  normalizeOrderedImages,
+  sanitizeImageMetadata,
+  setPrimaryImage,
+} from "../utils/mediaPolicy.js";
+
+const ensureObjectId = (value, label) => {
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    throw new Error(`Invalid ${label} id`);
+  }
+};
 
 const ensureSpaceExists = async (spaceId) => {
-  if (!mongoose.Types.ObjectId.isValid(spaceId)) {
-    throw new Error("Invalid space id");
-  }
-
+  ensureObjectId(spaceId, "space");
   const space = await Space.findById(spaceId).select("_id");
   if (!space) throw new Error("Space not found");
   return space;
 };
 
+const ensureResourceExists = async (resourceId) => {
+  ensureObjectId(resourceId, "resource");
+  const resource = await Resource.findById(resourceId).select("_id");
+  if (!resource) throw new Error("Resource not found");
+  return resource;
+};
+
 const ensureCityExists = async (cityId) => {
-  if (!mongoose.Types.ObjectId.isValid(cityId)) {
-    throw new Error("Invalid city id");
-  }
-
+  ensureObjectId(cityId, "city");
   const city = await City.findById(cityId).select("_id");
-
-  if (!city) {
-    throw new Error("City not found");
-  }
-
+  if (!city) throw new Error("City not found");
   return city;
 };
 
 const ensureAddonExists = async (addonId) => {
-  if (!mongoose.Types.ObjectId.isValid(addonId)) {
-    throw new Error("Invalid addon id");
-  }
-
+  ensureObjectId(addonId, "addon");
   const addon = await Addon.findById(addonId).select("_id");
+  if (!addon) throw new Error("Addon not found");
+  return addon;
+};
 
-  if (!addon) {
-    throw new Error("Addon not found");
+const ensureSeatingOptionExists = async (optionId) => {
+  ensureObjectId(optionId, "seating option");
+  const option = await SeatingOption.findById(optionId).select("_id");
+  if (!option) throw new Error("Seating option not found");
+  return option;
+};
+
+const getPublicAssetUrl = (aws, key, fallbackUrl = "") => {
+  if (!key) return fallbackUrl || "";
+
+  return publicUrlForKey({
+    bucketName: aws.bucketName,
+    region: aws.region,
+    key,
+  });
+};
+
+const normalizeImageOutput = (image, aws) => {
+  if (!image) return image;
+
+  const next = typeof image.toObject === "function" ? image.toObject() : { ...image };
+  next.url = getPublicAssetUrl(aws, next.s3Key, next.url);
+  return next;
+};
+
+const normalizeVideoOutput = (video, aws) => {
+  if (!video) return null;
+
+  const next = typeof video.toObject === "function" ? video.toObject() : { ...video };
+  next.url = getPublicAssetUrl(aws, next.s3Key, next.url);
+  return next;
+};
+
+const verifyStoredObject = async ({
+  tenant,
+  key,
+  expectedPrefix,
+  allowedMimeTypes,
+  maxBytes,
+  expectedSize,
+  entityLabel,
+}) => {
+  assertStorageKeyBelongsToPrefix(key, expectedPrefix, entityLabel);
+
+  const head = await headStorageObject({ tenant, key }).catch(() => null);
+
+  if (!head) {
+    throw new Error("Uploaded file not found in storage");
   }
 
-  return addon;
+  const contentType = String(head.ContentType || "").toLowerCase().trim();
+  const contentLength = Number(head.ContentLength || 0);
+
+  if (!allowedMimeTypes.includes(contentType)) {
+    throw new Error(`Unsupported stored file type for ${entityLabel}`);
+  }
+
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    throw new Error("Uploaded file size is invalid");
+  }
+
+  if (contentLength > maxBytes) {
+    throw new Error(`Uploaded file exceeds ${entityLabel} size limit`);
+  }
+
+  if (
+    Number.isFinite(Number(expectedSize)) &&
+    Number(expectedSize) > 0 &&
+    Number(expectedSize) !== contentLength
+  ) {
+    throw new Error("Uploaded file size does not match the saved metadata");
+  }
+
+  return {
+    contentType,
+    contentLength,
+  };
+};
+
+const ensureNoDuplicateKey = (items = [], key, entityLabel = "media") => {
+  if ((items || []).some((item) => item?.s3Key === key)) {
+    throw new Error(`This ${entityLabel} file is already attached`);
+  }
+};
+
+const rehydrateMedia = (media, aws) => {
+  if (!media) return null;
+
+  const next = typeof media.toObject === "function" ? media.toObject() : { ...media };
+  next.images = normalizeOrderedImages(next.images || []).map((image) =>
+    normalizeImageOutput(image, aws),
+  );
+  next.video = normalizeVideoOutput(next.video, aws);
+  return next;
+};
+
+const saveWithCompensation = async ({ doc, tenant, uploadedKey }) => {
+  try {
+    await doc.save();
+  } catch (error) {
+    if (uploadedKey) {
+      await deleteFromStorage({ tenant, key: uploadedKey }).catch(() => null);
+    }
+    throw error;
+  }
+};
+
+const sortReorderedImages = (images = [], items = []) => {
+  const orderMap = new Map(
+    (Array.isArray(items) ? items : []).map((item) => [
+      String(item?.imageId || ""),
+      Number(item?.order || 0),
+    ]),
+  );
+
+  (images || []).forEach((image) => {
+    const nextOrder = orderMap.get(String(image?._id || ""));
+    if (Number.isFinite(nextOrder) && nextOrder > 0) {
+      image.order = nextOrder;
+    }
+  });
+
+  return normalizeOrderedImages(images);
 };
 
 export const getOrCreateMedia = async (spaceId, userId = null) => {
@@ -60,104 +198,54 @@ export const getOrCreateMedia = async (spaceId, userId = null) => {
   return media;
 };
 
-const ensureSeatingOptionExists = async (optionId) => {
-  if (!mongoose.Types.ObjectId.isValid(optionId)) {
-    throw new Error("Invalid seating option id");
-  }
-
-  const option = await SeatingOption.findById(optionId).select("_id");
-
-  if (!option) {
-    throw new Error("Seating option not found");
-  }
-
-  return option;
-};
-
-/* ========== PRESIGN IMAGE ========== */
 export const getPresignForImage = async (
   entity,
   entityId,
   filename,
   contentType,
+  size,
   userId = null,
   tenant = null,
 ) => {
-  if (!filename || !contentType) {
-    throw new Error("filename and contentType are required");
-  }
+  ensureUploadIsAllowed({ entity, entityId, filename, contentType, size });
 
-  const folderMap = {
-    space: (id) => `spaces/${id}/images`,
-    resource: (id) => `spaces/${id}/resources`,
-    addon: (id) => `addons/${id}/images`,
-    seating_option: (id) => `seating-options/${id}/images`,
-    kyc: (id) => `kyc/${id}`,
-    user: (id) => `users/${id}/avatar`,
-    consultant: (id) => `consultants/${id || "new"}/profile`,
-
-    city_document: (id) => `documents/cities/${id}`,
-    space_document: (id) => `documents/spaces/${id}`,
-  };
-
-  if (!folderMap[entity]) {
-    throw new Error("Invalid upload entity");
-  }
-
-  if (entity === "space" || entity === "resource") {
+  if (entity === "space" || entity === "space_document") {
     await ensureSpaceExists(entityId);
-  }
-
-  if (entity === "addon") {
+  } else if (entity === "resource") {
+    await ensureResourceExists(entityId);
+  } else if (entity === "addon") {
     await ensureAddonExists(entityId);
-  }
-
-  if (entity === "seating_option") {
+  } else if (entity === "seating_option") {
     await ensureSeatingOptionExists(entityId);
-  }
-  if (entity === "space_document" || entity === "space") {
-    await ensureSpaceExists(entityId);
-  }
-  if (entity === "city_document") {
+  } else if (entity === "city_document") {
     await ensureCityExists(entityId);
-  }
-  if (entity === "kyc" && userId && String(entityId) !== String(userId)) {
-    throw new Error("You can upload only your own KYC");
-  }
-  if (
-    entity === "user" &&
-    (!userId || String(entityId) !== String(userId))
-  ) {
-    throw new Error("You can upload only your own profile image");
+  } else if (entity === "consultant" && !userId) {
+    throw new Error("Authentication required");
   }
 
-  let ext = "";
-  if (filename.includes(".")) {
-    ext = filename.substring(filename.lastIndexOf("."));
-  } else {
-    ext = "." + (mime.extension(contentType) || "jpg");
-  }
-
-  const random = Math.random().toString(36).slice(2, 8);
-  const key = `${folderMap[entity](entityId)}/${Date.now()}_${random}${ext}`;
+  const key = buildEntityMediaKey({
+    entity,
+    entityId,
+    filename,
+    contentType,
+  });
 
   const aws = await resolveAwsConfig(tenant);
-
   const { uploadUrl, expiresIn } = await createPresignedUpload({
     tenant,
     key,
     contentType,
     expiresSeconds: 900,
+    cacheControl: MEDIA_CACHE_CONTROL,
   });
 
   if (process.env.S3_PUBLIC === "true") {
-    const url = publicUrlForKey({
-      bucketName: aws.bucketName,
-      region: aws.region,
+    return {
+      uploadUrl,
       key,
-    });
-
-    return { uploadUrl, key, url, expiresIn };
+      url: getPublicAssetUrl(aws, key),
+      expiresIn,
+    };
   }
 
   const previewUrl = await createSignedGetUrl({
@@ -169,7 +257,6 @@ export const getPresignForImage = async (
   return { uploadUrl, key, previewUrl, expiresIn };
 };
 
-/* ========== IMAGES ========== */
 export const addImage = async (
   spaceId,
   imageData,
@@ -182,35 +269,46 @@ export const addImage = async (
     throw new Error("Image key is required");
   }
 
-  const aws = await resolveAwsConfig(tenant);
-  const url = publicUrlForKey({
-    bucketName: aws.bucketName,
-    region: aws.region,
+  const prefix = getEntityMediaPrefix("space", spaceId);
+  const uploaded = await verifyStoredObject({
+    tenant,
     key: imageData.key,
+    expectedPrefix: prefix,
+    allowedMimeTypes: IMAGE_ALLOWED_MIME_TYPES,
+    maxBytes: IMAGE_MAX_BYTES,
+    expectedSize: imageData.size,
+    entityLabel: "space image",
   });
 
+  const aws = await resolveAwsConfig(tenant);
   const media = await getOrCreateMedia(spaceId, userId);
-
-  const maxOrder = media.images.reduce(
-    (max, img) => Math.max(max, img.order || 0),
-    0,
-  );
+  ensureNoDuplicateKey(media.images, imageData.key, "image");
 
   const imageToSave = {
-    url,
+    url: getPublicAssetUrl(aws, imageData.key),
     s3Key: imageData.key,
-    altText: imageData.altText || "",
-    caption: imageData.caption || "",
-    order: maxOrder + 1,
-    size: imageData.size,
+    mimeType: uploaded.contentType,
+    altText: String(imageData.altText || "").trim(),
+    caption: String(imageData.caption || "").trim(),
+    order: (media.images || []).length + 1,
+    size: uploaded.contentLength,
+    width: imageData.width ?? null,
+    height: imageData.height ?? null,
+    isPrimary: (media.images || []).length === 0,
   };
 
   media.images.push(imageToSave);
+  normalizeOrderedImages(media.images);
 
   if (userId) media.updatedBy = userId;
-  await media.save();
+  await saveWithCompensation({
+    doc: media,
+    tenant,
+    uploadedKey: imageData.key,
+  });
 
-  return imageToSave;
+  const saved = media.images.find((image) => image.s3Key === imageData.key);
+  return normalizeImageOutput(saved, aws);
 };
 
 export const updateImage = async (
@@ -228,10 +326,77 @@ export const updateImage = async (
   const image = media.images.id(imageId);
   if (!image) throw new Error("Image not found");
 
-  Object.assign(image, updateData);
+  const updates = sanitizeImageMetadata(updateData);
+  Object.assign(image, updates);
+
+  if (updates.isPrimary) {
+    setPrimaryImage(media.images, imageId);
+  } else {
+    normalizeOrderedImages(media.images);
+  }
+
   if (userId) media.updatedBy = userId;
   await media.save();
-  return image;
+
+  const aws = await resolveAwsConfig(tenant);
+  return normalizeImageOutput(media.images.id(imageId), aws);
+};
+
+export const reorderImages = async (
+  spaceId,
+  items,
+  userId = null,
+  tenant = null,
+) => {
+  await ensureSpaceExists(spaceId);
+
+  if (!Array.isArray(items) || !items.length) {
+    throw new Error("Reorder items are required");
+  }
+
+  const media = await SpaceMedia.findOne({ space: spaceId });
+  if (!media) throw new Error("Media not found");
+
+  const currentIds = new Set((media.images || []).map((image) => String(image._id)));
+  const providedIds = new Set(items.map((item) => String(item?.imageId || "")));
+
+  if (currentIds.size !== providedIds.size) {
+    throw new Error("Reorder request must include every image exactly once");
+  }
+
+  for (const id of currentIds) {
+    if (!providedIds.has(id)) {
+      throw new Error("Reorder request must include every image exactly once");
+    }
+  }
+
+  sortReorderedImages(media.images, items);
+
+  if (userId) media.updatedBy = userId;
+  await media.save();
+
+  const aws = await resolveAwsConfig(tenant);
+  return media.images.map((image) => normalizeImageOutput(image, aws));
+};
+
+export const setPrimarySpaceImage = async (
+  spaceId,
+  imageId,
+  userId = null,
+  tenant = null,
+) => {
+  await ensureSpaceExists(spaceId);
+
+  const media = await SpaceMedia.findOne({ space: spaceId });
+  if (!media) throw new Error("Media not found");
+
+  setPrimaryImage(media.images, imageId);
+
+  if (userId) media.updatedBy = userId;
+  await media.save();
+
+  const aws = await resolveAwsConfig(tenant);
+  return media.images.map((image) => normalizeImageOutput(image, aws));
 };
 
 export const deleteImage = async (
@@ -245,67 +410,54 @@ export const deleteImage = async (
   const media = await SpaceMedia.findOne({ space: spaceId });
   if (!media) throw new Error("Media not found");
 
-  const img = media.images.find((i) => i._id.toString() === imageId.toString());
-  if (!img) throw new Error("Image not found");
+  const image = media.images.id(imageId);
+  if (!image) throw new Error("Image not found");
 
-  if (img.s3Key) {
-    await deleteFromStorage({ tenant, key: img.s3Key });
+  if (image.s3Key) {
+    await deleteFromStorage({ tenant, key: image.s3Key });
   }
 
-  media.images = media.images.filter(
-    (i) => i._id.toString() !== imageId.toString(),
-  );
-
-  media.images.forEach((img, i) => (img.order = i + 1));
+  image.deleteOne();
+  normalizeOrderedImages(media.images);
 
   if (userId) media.updatedBy = userId;
   await media.save();
-
   return true;
 };
 
-/* ========== PRESIGN VIDEO ========== */
 export const getPresignForVideo = async (
   spaceId,
   filename,
   contentType,
+  size,
   userId = null,
   tenant = null,
 ) => {
   await ensureSpaceExists(spaceId);
 
-  if (!contentType?.startsWith("video/")) {
-    throw new Error("Only video files allowed");
-  }
-
-  const random = Math.random().toString(36).slice(2, 8);
-  let ext = "";
-
-  if (filename.includes(".")) {
-    ext = filename.substring(filename.lastIndexOf("."));
-  } else {
-    ext = "." + (mime.extension(contentType) || "mp4");
-  }
-
-  const key = `videos/${spaceId}/${Date.now()}_${random}${ext}`;
+  const key = buildSpaceVideoKey({
+    spaceId,
+    filename,
+    contentType,
+    size,
+  });
 
   const aws = await resolveAwsConfig(tenant);
-
   const { uploadUrl, expiresIn } = await createPresignedUpload({
     tenant,
     key,
     contentType,
     expiresSeconds: 900,
+    cacheControl: MEDIA_CACHE_CONTROL,
   });
 
   if (process.env.S3_PUBLIC === "true") {
-    const url = publicUrlForKey({
-      bucketName: aws.bucketName,
-      region: aws.region,
+    return {
+      uploadUrl,
       key,
-    });
-
-    return { uploadUrl, key, url, expiresIn };
+      url: getPublicAssetUrl(aws, key),
+      expiresIn,
+    };
   }
 
   const previewUrl = await createSignedGetUrl({
@@ -329,33 +481,47 @@ export const addVideo = async (
     throw new Error("Video key is required");
   }
 
-  const aws = await resolveAwsConfig(tenant);
-  const url = publicUrlForKey({
-    bucketName: aws.bucketName,
-    region: aws.region,
+  const prefix = getSpaceVideoPrefix(spaceId);
+  const uploaded = await verifyStoredObject({
+    tenant,
     key: videoData.key,
+    expectedPrefix: prefix,
+    allowedMimeTypes: VIDEO_ALLOWED_MIME_TYPES,
+    maxBytes: VIDEO_MAX_BYTES,
+    expectedSize: videoData.size,
+    entityLabel: "space video",
   });
 
+  const aws = await resolveAwsConfig(tenant);
   let media = await SpaceMedia.findOne({ space: spaceId });
 
   if (media?.video?.s3Key) {
-    throw new Error("Video already exists. Use update instead.");
+    throw new Error("Video already exists. Use delete before uploading a new one.");
   }
 
   if (!media) media = new SpaceMedia({ space: spaceId, createdBy: userId });
 
   media.video = {
     s3Key: videoData.key,
-    url,
-    provider: videoData.provider || "custom",
+    url: getPublicAssetUrl(aws, videoData.key),
+    mimeType: "video/mp4",
+    provider: "custom",
     duration: videoData.duration ? Number(videoData.duration) : undefined,
-    caption: videoData.caption || undefined,
+    caption: videoData.caption ? String(videoData.caption).trim() : undefined,
+    size: uploaded.contentLength,
+    width: videoData.width ?? null,
+    height: videoData.height ?? null,
+    thumbnail: videoData.thumbnail || "",
   };
 
   if (userId) media.updatedBy = userId;
-  await media.save();
+  await saveWithCompensation({
+    doc: media,
+    tenant,
+    uploadedKey: videoData.key,
+  });
 
-  return media.video;
+  return normalizeVideoOutput(media.video, aws);
 };
 
 export const updateVideo = async (
@@ -371,10 +537,19 @@ export const updateVideo = async (
     throw new Error("Video not found. Use add instead.");
   }
 
-  Object.assign(media.video, videoData);
+  if (videoData.caption !== undefined) {
+    media.video.caption = String(videoData.caption || "").trim();
+  }
+
+  if (videoData.duration !== undefined) {
+    media.video.duration = Number(videoData.duration);
+  }
+
   if (userId) media.updatedBy = userId;
   await media.save();
-  return media.video;
+
+  const aws = await resolveAwsConfig(tenant);
+  return normalizeVideoOutput(media.video, aws);
 };
 
 export const deleteVideo = async (spaceId, userId = null, tenant = null) => {
@@ -395,13 +570,16 @@ export const deleteVideo = async (spaceId, userId = null, tenant = null) => {
   return true;
 };
 
-export const getMediaBySpace = async (spaceId) => {
-  if (!mongoose.Types.ObjectId.isValid(spaceId)) {
-    throw new Error("Invalid space id");
-  }
+export const getMediaBySpace = async (spaceId, tenant = null) => {
+  ensureObjectId(spaceId, "space");
 
-  return await SpaceMedia.findOne({ space: spaceId })
+  const media = await SpaceMedia.findOne({ space: spaceId })
     .select("images video")
     .lean()
     .exec();
+
+  if (!media) return null;
+
+  const aws = await resolveAwsConfig(tenant);
+  return rehydrateMedia(media, aws);
 };

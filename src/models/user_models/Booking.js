@@ -278,6 +278,13 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    sourceDraftId: {
+      type: Schema.Types.ObjectId,
+      ref: "BookingDraft",
+      default: null,
+      index: true,
+    },
+
     planPurchase: {
       type: Schema.Types.ObjectId,
       ref: "PlanPurchase",

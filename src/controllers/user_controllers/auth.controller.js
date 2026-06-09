@@ -10,6 +10,7 @@ import {
 import { getRefreshCookieOptions } from "../../utils/cookieUtils.js";
 import mongoose from "mongoose";
 import { getPlatformConfigValues } from "../../services/platformConfigResolver.service.js";
+import { attachGuestBookingDraftsToUser } from "./bookingDraft.controller.js";
 
 
 
@@ -94,6 +95,8 @@ export const verifyOtp = async (req, res) => {
         { intent },
       );
 
+    const draftMigration = await attachGuestBookingDraftsToUser(req, user?._id);
+
     const cookieOptions = getRefreshCookieOptions();
     res.cookie("refreshToken", refreshToken, cookieOptions);
 
@@ -101,6 +104,7 @@ export const verifyOtp = async (req, res) => {
       accessToken,
       user: user.toJSON(),
       company,
+      bookingDraftsMigrated: Number(draftMigration?.updatedCount || 0),
     });
   } catch (error) {
     res.status(401).json({ message: error.message });

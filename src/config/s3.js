@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getCredentials } from "../services/credentialResolver.js";
@@ -60,6 +61,7 @@ export async function createPresignedUpload({
   key,
   contentType,
   expiresSeconds = 900,
+  cacheControl,
 }) {
   if (!key) throw new Error("key is required");
   if (!contentType) throw new Error("contentType is required");
@@ -71,6 +73,7 @@ export async function createPresignedUpload({
     Bucket: aws.bucketName,
     Key: key,
     ContentType: contentType,
+    ...(cacheControl ? { CacheControl: cacheControl } : {}),
   });
 
   const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: expiresSeconds });
@@ -120,4 +123,18 @@ export async function deleteFromStorage({ tenant, key }) {
     console.error("S3 delete failed:", err);
     throw new Error("Failed to delete file from storage");
   }
+}
+
+export async function headStorageObject({ tenant, key }) {
+  if (!key) throw new Error("key is required");
+
+  const aws = await resolveAwsConfig(tenant);
+  const s3 = createS3Client(aws);
+
+  const cmd = new HeadObjectCommand({
+    Bucket: aws.bucketName,
+    Key: key,
+  });
+
+  return s3.send(cmd);
 }

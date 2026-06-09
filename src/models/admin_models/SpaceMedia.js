@@ -6,10 +6,14 @@ const imageSchema = new Schema(
   {
     url: { type: String },
     s3Key: { type: String },
+    mimeType: { type: String, default: "" },
     altText: { type: String, default: "" },
     caption: { type: String, default: "" },
     order: { type: Number, default: 0 },
     size: Number,
+    width: { type: Number, default: null },
+    height: { type: Number, default: null },
+    isPrimary: { type: Boolean, default: false },
   },
   { _id: true },
 ); 
@@ -18,6 +22,7 @@ const videoSchema = new Schema(
   {
     url: String,
     s3Key: { type: String }, 
+    mimeType: { type: String, default: "video/mp4" },
     provider: {
       type: String,
       enum: ["youtube", "vimeo", "custom"],
@@ -26,6 +31,9 @@ const videoSchema = new Schema(
     thumbnail: String,
     duration: Number,
     caption: String,
+    size: { type: Number, default: 0 },
+    width: { type: Number, default: null },
+    height: { type: Number, default: null },
   },
   { _id: false },
 );

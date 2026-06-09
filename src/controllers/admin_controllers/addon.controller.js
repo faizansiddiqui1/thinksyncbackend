@@ -49,7 +49,7 @@ export async function getAllAddons(req, res, next) {
       select: req.query.select,
     };
 
-    const addons = await service.getAllAddons(filters, req.user);
+    const addons = await service.getAllAddons(filters, req.user, getTenant(req));
 
     return res.status(200).json({
       success: true,
@@ -77,7 +77,7 @@ export async function listAddonsBySpace(req, res, next) {
       sort: req.query.sort || "-createdAt",
     };
 
-    const addons = await service.getAddonsBySpace(spaceId, opts, req.user);
+    const addons = await service.getAddonsBySpace(spaceId, opts, req.user, getTenant(req));
 
     return res.status(200).json({
       success: true,
@@ -95,7 +95,7 @@ export async function listAddonsBySpace(req, res, next) {
 export async function getAddon(req, res, next) {
   try {
     const { addonId } = req.params;
-    const addon = await service.getAddonById(addonId, req.user);
+    const addon = await service.getAddonById(addonId, req.user, getTenant(req));
 
     return res.status(200).json({
       success: true,
@@ -166,6 +166,55 @@ export async function addAddonImage(req, res, next) {
       message: "Image added",
       data: img,
     });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function updateAddonImageMetadata(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const image = await service.updateAddonImageMetadata(
+      req.params.addonId,
+      req.params.imageId,
+      req.body,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: image });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function reorderAddonImages(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.reorderAddonImages(
+      req.params.addonId,
+      req.body?.items,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function setPrimaryAddonImage(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.setPrimaryAddonImage(
+      req.params.addonId,
+      req.params.imageId,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
   } catch (err) {
     return next(err);
   }

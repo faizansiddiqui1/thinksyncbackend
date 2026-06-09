@@ -12,3 +12,19 @@ export const getRefreshCookieOptions = () => {
     path: '/',                       // broad enough for refresh, logout, etc.
   };
 };
+
+export const BOOKING_DRAFT_GUEST_COOKIE = "thinksync_guest_booking";
+
+export const getGuestDraftCookieOptions = () => {
+  const isProd = process.env.NODE_ENV === "production";
+  const cookieDomain = isProd ? ".thinksyncspace.com" : undefined;
+
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    domain: cookieDomain,
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: "/",
+  };
+};

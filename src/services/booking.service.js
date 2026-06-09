@@ -153,6 +153,7 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     const booking = await Booking.create({
       _id: bookingObjectId,
       bookingId: internalBookingId,
+      sourceDraftId: bookingData.sourceDraftId || null,
       user: finalUser,
       space: spaceId,
       spaceType: bookingData.spaceType || space.spaceType || "",
@@ -479,6 +480,7 @@ async function initializeBookingPaymentSession({
   await TempBooking.create({
     orderId: gatewayOrderId,
     bookingId: booking._id,
+    draftId: booking.sourceDraftId || null,
     gateway,
     internalBookingId: booking.bookingId,
     bookingData: bookingData || getBookingSnapshot(booking),

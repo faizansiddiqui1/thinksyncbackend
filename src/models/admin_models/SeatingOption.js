@@ -22,10 +22,14 @@ const imageSchema = new Schema(
   {
     url: { type: String, required: true },
     s3Key: { type: String, required: true },
+    mimeType: { type: String, default: "" },
     altText: { type: String, default: "" },
     caption: { type: String, default: "" },
     order: { type: Number, default: 0 },
     size: { type: Number, default: 0 },
+    width: { type: Number, default: null },
+    height: { type: Number, default: null },
+    isPrimary: { type: Boolean, default: false },
   },
   { _id: true },
 );

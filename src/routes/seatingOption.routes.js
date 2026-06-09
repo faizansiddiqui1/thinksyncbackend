@@ -50,6 +50,24 @@ router.post(
   controller.addSeatingOptionImage,
 );
 
+router.patch(
+  "/seating-options/:optionId/images/:imageId",
+  requireAuth,
+  controller.updateSeatingOptionImageMetadata,
+);
+
+router.put(
+  "/seating-options/:optionId/images/reorder",
+  requireAuth,
+  controller.reorderSeatingOptionImages,
+);
+
+router.put(
+  "/seating-options/:optionId/images/:imageId/primary",
+  requireAuth,
+  controller.setPrimarySeatingOptionImage,
+);
+
 // IMAGE DELETE
 // DELETE /api/seatingOption/seating-options/:optionId/images/:imageId
 router.delete(

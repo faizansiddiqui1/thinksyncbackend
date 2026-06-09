@@ -36,7 +36,7 @@ export async function createResource(req, res, next) {
  */
 export async function getAllResources(req, res, next) {
   try {
-    const resources = await service.getAllResources(req.user);
+    const resources = await service.getAllResources(req.user, getTenant(req));
 
     return res.status(200).json({
       success: true,
@@ -69,6 +69,55 @@ export const addResourceImage = async (req, res) => {
     });
   }
 };
+
+export async function updateResourceImageMetadata(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const image = await service.updateResourceImageMetadata(
+      req.params.resourceId,
+      req.params.imageId,
+      req.body,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: image });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function reorderResourceImages(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.reorderResourceImages(
+      req.params.resourceId,
+      req.body?.items,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function setPrimaryResourceImage(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.setPrimaryResourceImage(
+      req.params.resourceId,
+      req.params.imageId,
+      req.user,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
+  } catch (err) {
+    return next(err);
+  }
+}
 
 /**
  * DELETE /resources/:resourceId/images/:imageId
@@ -108,7 +157,7 @@ export async function listResourcesBySpace(req, res, next) {
       sort: req.query.sort || "-createdAt",
     };
 
-    const resources = await service.getResourcesBySpace(spaceId, opts, req.user);
+    const resources = await service.getResourcesBySpace(spaceId, opts, req.user, getTenant(req));
 
     return res
       .status(200)
@@ -124,7 +173,7 @@ export async function listResourcesBySpace(req, res, next) {
 export async function getResource(req, res, next) {
   try {
     const { resourceId } = req.params;
-    const resource = await service.getResourceById(resourceId, req.user);
+    const resource = await service.getResourceById(resourceId, req.user, getTenant(req));
 
     return res.status(200).json({ success: true, data: resource });
   } catch (err) {

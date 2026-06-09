@@ -6,10 +6,14 @@ const imageSchema = new Schema(
   {
     url: { type: String, default: "" },
     s3Key: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
     altText: { type: String, default: "" },
     caption: { type: String, default: "" },
     order: { type: Number, default: 0 },
     size: { type: Number, default: 0 },
+    width: { type: Number, default: null },
+    height: { type: Number, default: null },
+    isPrimary: { type: Boolean, default: false },
   },
   { _id: true },
 );
@@ -77,7 +81,7 @@ const addonSchema = new Schema(
     price: {
       type: Number,
       required: true,
-      min: 0,
+      min: 11,
     },
 
     currency: {
@@ -139,5 +143,15 @@ const addonSchema = new Schema(
 addonSchema.index({ space: 1, isActive: 1 });
 addonSchema.index({ type: 1, category: 1 });
 addonSchema.index({ space: 1, type: 1, isActive: 1 });
+
+addonSchema.pre("validate", function (next) {
+  const numericPrice = Number(this.price);
+
+  if (!Number.isFinite(numericPrice) || numericPrice <= 10) {
+    return next(new Error("Addon price must be greater than 10"));
+  }
+
+  return next();
+});
 
 export default mongoose.model("Addon", addonSchema);

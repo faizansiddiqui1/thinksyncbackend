@@ -8,6 +8,7 @@ import {
 } from "./mail.service.js";
 import { ensureBookingAccessCredential } from "./securityAccess/securityAccess.service.js";
 import { activatePaidPlanPurchase } from "./planMembership.service.js";
+import { markBookingDraftCompleted } from "./bookingDraft.service.js";
 
 function getUserIdFromBookingData(bookingData) {
   return (
@@ -189,6 +190,10 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
         existingBooking.purchaseIntent = "PLAN_MEMBERSHIP";
         await existingBooking.save();
       }
+      await markBookingDraftCompleted(
+        existingBooking?.sourceDraftId || temp?.draftId || null,
+        "paid",
+      ).catch(() => null);
       await TempBooking.deleteOne({ _id: temp._id });
       return { success: true, data: existingBooking };
     }
@@ -282,6 +287,11 @@ export async function finalizeTempBooking({ orderId, paymentInfo, gateway }) {
         console.error("booking access credential generation failed:", error?.message || error);
       }
     }
+
+    await markBookingDraftCompleted(
+      booking?.sourceDraftId || claimedTemp?.draftId || null,
+      "paid",
+    ).catch(() => null);
 
     await TempBooking.deleteOne({ _id: claimedTemp._id });
 

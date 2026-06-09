@@ -8,6 +8,12 @@ const tempBookingSchema = new mongoose.Schema({
     default: null,
     index: true,
   },
+  draftId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "BookingDraft",
+    default: null,
+    index: true,
+  },
   internalBookingId: { type: String, default: "" },
   gateway: { type: String, default: "" },
   bookingData: Object,

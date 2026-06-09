@@ -66,6 +66,7 @@ export const createSpace = async (req, res) => {
 export const getFullSpaceById = async (req, res) => {
   try {
     const { id } = req.params;
+    const tenant = req.context?.tenant || req.tenant || null;
 
     const spaceDoc = await ensureSpaceAccess(id, req.user);
     const space = await Space.findById(spaceDoc._id)
@@ -94,7 +95,7 @@ export const getFullSpaceById = async (req, res) => {
 
         Offer.find({ space: id }).lean(),
 
-        mediaService.getMediaBySpace(id),
+        mediaService.getMediaBySpace(id, tenant),
 
         VirtualOfficePlan.find({
           space: id,
@@ -426,7 +427,8 @@ export const deleteSpace = async (req, res) => {
     }
 
     await ensureSpaceAccess(req.params.id, req.user);
-    const space = await serviceDeleteSpace(req.params.id);
+    const tenant = req.context?.tenant || req.tenant || null;
+    const space = await serviceDeleteSpace(req.params.id, tenant);
     return res.status(200).json({
       message: "Space deleted successfully!",
       data: space,
@@ -492,6 +494,8 @@ export const getSpaceDetailsBySlug = async (req, res) => {
     }
 
     const data = await fetchSpaceDetailsBySlug(slug, req.user || null);
+
+    res.set("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=600");
 
     return res.status(200).json({
       success: true,

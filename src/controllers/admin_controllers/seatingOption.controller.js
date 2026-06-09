@@ -44,7 +44,7 @@ export async function listSeatingOptionsBySpace(req, res, next) {
       sort: req.query.sort || "-displayOrder -createdAt",
     };
 
-    const options = await service.getSeatingOptionsBySpace(spaceId, opts);
+    const options = await service.getSeatingOptionsBySpace(spaceId, opts, getTenant(req));
 
     return res.status(200).json({
       success: true,
@@ -62,7 +62,7 @@ export async function listSeatingOptionsBySpace(req, res, next) {
 export async function getSeatingOption(req, res, next) {
   try {
     const { optionId } = req.params;
-    const option = await service.getSeatingOptionById(optionId);
+    const option = await service.getSeatingOptionById(optionId, getTenant(req));
 
     return res.status(200).json({ success: true, data: option });
   } catch (err) {
@@ -146,6 +146,52 @@ export async function deleteSeatingOptionImage(req, res, next) {
       message: "Image deleted successfully",
       data: result,
     });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function updateSeatingOptionImageMetadata(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const image = await service.updateSeatingOptionImageMetadata(
+      req.params.optionId,
+      req.params.imageId,
+      req.body,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: image });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function reorderSeatingOptionImages(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.reorderSeatingOptionImages(
+      req.params.optionId,
+      req.body?.items,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function setPrimarySeatingOptionImage(req, res, next) {
+  try {
+    const tenant = getTenant(req);
+    const images = await service.setPrimarySeatingOptionImage(
+      req.params.optionId,
+      req.params.imageId,
+      tenant,
+    );
+
+    return res.status(200).json({ success: true, data: images });
   } catch (err) {
     return next(err);
   }

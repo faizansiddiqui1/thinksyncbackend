@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { runBookingCompletionCycle } from "../services/bookingCompletion.service.js";
+import { expireStaleBookingDrafts } from "../services/bookingDraft.service.js";
 
 let bookingCompletionJob = null;
 let cycleInProgress = false;
@@ -16,7 +17,15 @@ async function runScheduledCycle() {
   cycleInProgress = true;
 
   try {
-    const result = await runBookingCompletionCycle();
+    const [bookingResult, draftResult] = await Promise.all([
+      runBookingCompletionCycle(),
+      expireStaleBookingDrafts(),
+    ]);
+
+    const result = {
+      booking: bookingResult,
+      drafts: draftResult,
+    };
 
     console.log(
       "[bookingCompletionCron]",

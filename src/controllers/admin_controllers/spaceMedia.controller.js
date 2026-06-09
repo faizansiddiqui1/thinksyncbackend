@@ -3,13 +3,13 @@ import * as service from "../../services/spaceMedia.service.js";
 /* PRESIGN */
 export const getPresignForImage = async (req, res) => {
   try {
-    const { entity, entityId, filename, contentType } = req.body;
+    const { entity, entityId, filename, contentType, size } = req.body;
     const userId = req.user?.id;
     const tenant = req.context?.tenant || req.tenant || null;
 
-    if (!entity || !entityId || !filename || !contentType) {
+    if (!entity || !entityId || !filename || !contentType || !size) {
       return res.status(400).json({
-        message: "entity, entityId, filename and contentType required",
+        message: "entity, entityId, filename, contentType and size required",
       });
     }
 
@@ -18,6 +18,7 @@ export const getPresignForImage = async (req, res) => {
       entityId,
       filename,
       contentType,
+      size,
       userId,
       tenant,
     );
@@ -63,7 +64,39 @@ export const updateSpaceImage = async (req, res) => {
 
     return res.status(200).json({ message: "Image updated", data: img });
   } catch (err) {
-    return res.status(400).json({ message: err.message });
+    return res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+export const reorderSpaceImages = async (req, res) => {
+  try {
+    const tenant = req.context?.tenant || req.tenant || null;
+    const images = await service.reorderImages(
+      req.params.spaceId,
+      req.body?.items,
+      req.user?.id,
+      tenant,
+    );
+
+    return res.status(200).json({ message: "Images reordered", data: images });
+  } catch (err) {
+    return res.status(err.status || 400).json({ message: err.message });
+  }
+};
+
+export const setPrimarySpaceImage = async (req, res) => {
+  try {
+    const tenant = req.context?.tenant || req.tenant || null;
+    const images = await service.setPrimarySpaceImage(
+      req.params.spaceId,
+      req.params.imageId,
+      req.user?.id,
+      tenant,
+    );
+
+    return res.status(200).json({ message: "Primary image updated", data: images });
+  } catch (err) {
+    return res.status(err.status || 400).json({ message: err.message });
   }
 };
 
@@ -87,19 +120,20 @@ export const deleteSpaceImage = async (req, res) => {
 /* VIDEO */
 export const getPresignForVideo = async (req, res) => {
   try {
-    const { filename, contentType } = req.body;
+    const { filename, contentType, size } = req.body;
     const tenant = req.context?.tenant || req.tenant || null;
 
-    if (!filename || !contentType) {
+    if (!filename || !contentType || !size) {
       return res
         .status(400)
-        .json({ message: "filename and contentType required" });
+        .json({ message: "filename, contentType and size required" });
     }
 
     const data = await service.getPresignForVideo(
       req.params.spaceId,
       filename,
       contentType,
+      size,
       req.user?.id,
       tenant,
     );
@@ -158,7 +192,8 @@ export const deleteSpaceVideo = async (req, res) => {
 /* GET media */
 export const getSpaceMedia = async (req, res) => {
   try {
-    const media = await service.getMediaBySpace(req.params.spaceId);
+    const tenant = req.context?.tenant || req.tenant || null;
+    const media = await service.getMediaBySpace(req.params.spaceId, tenant);
 
     return res.status(200).json({
       message: "Media retrieved",
