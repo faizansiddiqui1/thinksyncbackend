@@ -2,6 +2,7 @@ import crypto from "crypto";
 import mongoose from "mongoose";
 import BookingDraft from "../models/user_models/BookingDraft.js";
 import Booking from "../models/user_models/Booking.js";
+import TempBooking from "../models/user_models/TempBooking.js";
 import Space from "../models/admin_models/Space.js";
 import PricingPlan from "../models/admin_models/PricingPlan.js";
 import Resource from "../models/admin_models/ResourceSchema.js";
@@ -17,6 +18,14 @@ const DEFAULT_DRAFT_TTL_HOURS = Math.max(
   Number(process.env.BOOKING_DRAFT_TTL_HOURS || 24),
 );
 const DEFAULT_GST_PERCENTAGE = 18;
+
+function normalizeDraftStage(value = "checkout") {
+  const stage = safeString(value || "checkout").toLowerCase();
+  if (["cart", "availability", "checkout", "completed", "cancelled"].includes(stage)) {
+    return stage;
+  }
+  return "checkout";
+}
 
 function normalizePlan(value = "daily") {
   const normalized = String(value || "daily").trim().toLowerCase();
@@ -84,6 +93,59 @@ function canRetryExistingBooking(booking = null) {
       booking.payment?.status !== "paid" &&
       ["draft", "pending_payment", "payment_processing"].includes(String(booking.status || "").toLowerCase()),
   );
+}
+
+function hasCheckoutSelection(materialized = {}) {
+  return Boolean(
+    materialized &&
+      materialized.draftStage !== "cart" &&
+      materialized?.space?.spaceId &&
+      materialized?.selection?.startDateTime &&
+      materialized?.selection?.endDateTime,
+  );
+}
+
+function buildDraftMatchingSignature(source = {}) {
+  const resources = Array.isArray(source?.resources) ? source.resources : [];
+  const addons = Array.isArray(source?.addons) ? source.addons : [];
+  const primaryItem = source?.selection?.primaryItem || null;
+
+  return JSON.stringify({
+    stage: normalizeDraftStage(source?.draftStage || source?.stage),
+    purchaseIntent:
+      safeString(source?.selection?.purchaseIntent || source?.purchaseIntent).toUpperCase() ===
+      "PLAN_MEMBERSHIP"
+        ? "PLAN_MEMBERSHIP"
+        : "BOOKING",
+    spaceId: String(source?.space?.spaceId || source?.spaceId || ""),
+    bookingType: normalizePlan(source?.selection?.bookingType || source?.bookingType),
+    startDateTime: source?.selection?.startDateTime
+      ? new Date(source.selection.startDateTime).toISOString()
+      : source?.startDateTime
+        ? new Date(source.startDateTime).toISOString()
+        : "",
+    endDateTime: source?.selection?.endDateTime
+      ? new Date(source.selection.endDateTime).toISOString()
+      : source?.endDateTime
+        ? new Date(source.endDateTime).toISOString()
+        : "",
+    primaryItem: {
+      source: safeString(primaryItem?.source).toLowerCase(),
+      id: String(primaryItem?.id || ""),
+    },
+    resources: resources
+      .map((item) => ({
+        id: String(item?.resourceId || item?.id || ""),
+        qty: toInteger(item?.quantity || item?.qty, 1),
+      }))
+      .sort((left, right) => `${left.id}:${left.qty}`.localeCompare(`${right.id}:${right.qty}`)),
+    addons: addons
+      .map((item) => ({
+        id: String(item?.addonId || item?.id || ""),
+        qty: toInteger(item?.quantity || item?.qty, 1),
+      }))
+      .sort((left, right) => `${left.id}:${left.qty}`.localeCompare(`${right.id}:${right.qty}`)),
+  });
 }
 
 function isBlockingIssue(issue = {}) {
@@ -212,8 +274,14 @@ async function resolvePricingPlan(spaceId, planId) {
 
 async function buildDraftMaterializedState(input = {}) {
   const issues = [];
+  const draftStage = normalizeDraftStage(input?.draftStage || input?.stage);
   const spaceId = normalizeObjectId(input?.space?.spaceId || input?.spaceId);
   const bookingType = normalizePlan(input?.selection?.bookingType || input?.bookingType);
+  const purchaseIntent =
+    safeString(input?.selection?.purchaseIntent || input?.purchaseIntent).toUpperCase() ===
+    "PLAN_MEMBERSHIP"
+      ? "PLAN_MEMBERSHIP"
+      : "BOOKING";
   const resources = normalizeRequestedResources(input?.resources);
   const addons = normalizeRequestedAddons(input?.addons);
   const lineItems = normalizeDraftLineItems(input?.pricingSummary?.lineItems || input?.lineItems);
@@ -223,6 +291,9 @@ async function buildDraftMaterializedState(input = {}) {
   ).toUpperCase();
   const startDateTime = input?.selection?.startDateTime || input?.startDateTime || null;
   const endDateTime = input?.selection?.endDateTime || input?.endDateTime || null;
+  const existingCheckoutBookingId = normalizeObjectId(
+    input?.checkout?.bookingId || input?.checkoutBookingId || null,
+  );
 
   if (!spaceId) {
     issues.push(
@@ -320,6 +391,31 @@ async function buildDraftMaterializedState(input = {}) {
       );
     }
 
+    if (
+      catalog &&
+      safeString(catalog?.type).toLowerCase() === "shop" &&
+      catalog?.stock !== null &&
+      catalog?.stock !== undefined &&
+      requested.quantity > Number(catalog.stock || 0)
+    ) {
+      issues.push(
+        buildValidationIssue(
+          "addon_stock_exceeded",
+          `${catalog.title || requested.name || "Selected add-on"} only has ${Number(
+            catalog.stock || 0,
+          )} item${Number(catalog.stock || 0) === 1 ? "" : "s"} left in stock.`,
+          {
+            field: "addons",
+            meta: {
+              addonId: String(requested.addonId),
+              requestedQuantity: requested.quantity,
+              availableStock: Number(catalog.stock || 0),
+            },
+          },
+        ),
+      );
+    }
+
     return {
       addonId: requested.addonId,
       name: safeString(catalog?.title || requested.name),
@@ -367,7 +463,9 @@ async function buildDraftMaterializedState(input = {}) {
     );
   }
 
-  if (!startDateTime || !endDateTime) {
+  const requiresBookingWindow = draftStage !== "cart";
+
+  if (requiresBookingWindow && (!startDateTime || !endDateTime)) {
     issues.push(
       buildValidationIssue(
         "time_range_missing",
@@ -381,6 +479,7 @@ async function buildDraftMaterializedState(input = {}) {
   const normalizedEnd = endDateTime ? new Date(endDateTime) : null;
 
   if (
+    requiresBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     (!Number.isFinite(normalizedStart.getTime()) ||
@@ -397,6 +496,7 @@ async function buildDraftMaterializedState(input = {}) {
   }
 
   if (
+    requiresBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     Number.isFinite(normalizedStart.getTime()) &&
@@ -407,6 +507,7 @@ async function buildDraftMaterializedState(input = {}) {
         resource.resourceId,
         normalizedStart,
         normalizedEnd,
+        existingCheckoutBookingId || null,
       );
 
       if (!availability.available) {
@@ -486,13 +587,83 @@ async function buildDraftMaterializedState(input = {}) {
   }
 
   const validationState =
-    !normalizedLineItems.length || !spaceId || !startDateTime || !endDateTime
+    !normalizedLineItems.length ||
+    !spaceId ||
+    (requiresBookingWindow && (!startDateTime || !endDateTime))
       ? "incomplete"
       : issues.some(isBlockingIssue)
       ? "invalid"
       : "valid";
 
+  const requestedPrimaryItem = input?.selection?.primaryItem || input?.primaryItem || null;
+  const requestedPrimaryId = safeString(
+    requestedPrimaryItem?.id || requestedPrimaryItem?.resourceId || requestedPrimaryItem?.addonId,
+  );
+  const requestedPrimarySource = safeString(requestedPrimaryItem?.source).toLowerCase();
+
+  const canonicalPrimaryResource =
+    normalizedResources.find(
+      (resource) => String(resource?.resourceId || "") === String(requestedPrimaryId || ""),
+    ) || normalizedResources[0] || null;
+  const canonicalPrimaryAddon =
+    normalizedAddons.find(
+      (addon) => String(addon?.addonId || "") === String(requestedPrimaryId || ""),
+    ) || normalizedAddons[0] || null;
+
+  let canonicalPrimaryItem = requestedPrimaryItem || null;
+
+  if (purchaseIntent === "PLAN_MEMBERSHIP") {
+    canonicalPrimaryItem = {
+      id: String(plan?._id || normalizeObjectId(input?.selection?.planId || input?.planId) || ""),
+      source: "plan",
+      name:
+        safeString(requestedPrimaryItem?.name) ||
+        safeString(plan?.name) ||
+        `${bookingType} plan`,
+      type: bookingType,
+      qty: Math.max(1, toInteger(requestedPrimaryItem?.qty, 1)),
+      unitPrice: toPositiveNumber(plan?.price, requestedPrimaryItem?.unitPrice),
+    };
+  } else if (requestedPrimarySource === "addon" && canonicalPrimaryAddon) {
+    canonicalPrimaryItem = {
+      id: String(canonicalPrimaryAddon.addonId),
+      source: "addon",
+      name: safeString(canonicalPrimaryAddon.name || requestedPrimaryItem?.name),
+      type: safeString(canonicalPrimaryAddon.type || requestedPrimaryItem?.type),
+      qty: Math.max(1, toInteger(canonicalPrimaryAddon.quantity, 1)),
+      unitPrice: toPositiveNumber(
+        canonicalPrimaryAddon.unitPriceSnapshot,
+        requestedPrimaryItem?.unitPrice,
+      ),
+    };
+  } else if (canonicalPrimaryResource) {
+    canonicalPrimaryItem = {
+      id: String(canonicalPrimaryResource.resourceId),
+      source: "resource",
+      name: safeString(canonicalPrimaryResource.name || requestedPrimaryItem?.name),
+      type: safeString(canonicalPrimaryResource.type || requestedPrimaryItem?.type),
+      qty: Math.max(1, toInteger(canonicalPrimaryResource.quantity, 1)),
+      unitPrice: toPositiveNumber(
+        canonicalPrimaryResource.unitPriceSnapshot,
+        requestedPrimaryItem?.unitPrice,
+      ),
+    };
+  } else if (canonicalPrimaryAddon) {
+    canonicalPrimaryItem = {
+      id: String(canonicalPrimaryAddon.addonId),
+      source: "addon",
+      name: safeString(canonicalPrimaryAddon.name || requestedPrimaryItem?.name),
+      type: safeString(canonicalPrimaryAddon.type || requestedPrimaryItem?.type),
+      qty: Math.max(1, toInteger(canonicalPrimaryAddon.quantity, 1)),
+      unitPrice: toPositiveNumber(
+        canonicalPrimaryAddon.unitPriceSnapshot,
+        requestedPrimaryItem?.unitPrice,
+      ),
+    };
+  }
+
   return {
+    draftStage,
     space: {
       spaceId,
       slug: safeString(input?.space?.slug || space?.slug),
@@ -516,11 +687,8 @@ async function buildDraftMaterializedState(input = {}) {
         : [],
       chargeLines,
       planId: plan?._id || normalizeObjectId(input?.selection?.planId || input?.planId),
-      purchaseIntent:
-        safeString(input?.selection?.purchaseIntent || input?.purchaseIntent).toUpperCase() === "PLAN_MEMBERSHIP"
-          ? "PLAN_MEMBERSHIP"
-          : "BOOKING",
-      primaryItem: input?.selection?.primaryItem || input?.primaryItem || null,
+      purchaseIntent,
+      primaryItem: canonicalPrimaryItem,
     },
     resources: normalizedResources,
     addons: normalizedAddons,
@@ -554,7 +722,98 @@ function serializeDraftDocument(draft) {
   };
 }
 
+async function adoptResumableCheckoutBooking(draft) {
+  if (!draft?.owner?.userId || !hasCheckoutSelection(draft)) {
+    return null;
+  }
+
+  const draftSignature = buildDraftMatchingSignature(draft);
+
+  const candidates = await Booking.find({
+    "user.userId": normalizeObjectId(draft.owner.userId),
+    space: normalizeObjectId(draft?.space?.spaceId),
+    bookingType: normalizePlan(draft?.selection?.bookingType),
+    purchaseIntent:
+      draft?.selection?.purchaseIntent === "PLAN_MEMBERSHIP" ? "PLAN_MEMBERSHIP" : "BOOKING",
+    startDateTime: new Date(draft.selection.startDateTime),
+    endDateTime: new Date(draft.selection.endDateTime),
+    status: {
+      $in: ["draft", "pending_payment", "payment_processing"],
+    },
+  }).sort({ updatedAt: -1, createdAt: -1 });
+
+  const matchingBooking =
+    candidates.find((booking) => {
+      if (!canRetryExistingBooking(booking)) return false;
+      return buildDraftMatchingSignature({
+        draftStage: "checkout",
+        space: {
+          spaceId: booking.space,
+        },
+        selection: {
+          bookingType: booking.bookingType,
+          startDateTime: booking.startDateTime,
+          endDateTime: booking.endDateTime,
+          purchaseIntent: booking.purchaseIntent || "BOOKING",
+          primaryItem:
+            Array.isArray(booking.resources) && booking.resources[0]
+              ? {
+                  source: "resource",
+                  id: String(booking.resources[0].resourceId || ""),
+                }
+              : null,
+        },
+        resources: booking.resources || [],
+        addons: booking.addons || [],
+      }) === draftSignature;
+    }) || null;
+
+  if (!matchingBooking) {
+    return null;
+  }
+
+  const bookingId = String(matchingBooking._id || "");
+  const currentBookingId = String(draft?.checkout?.bookingId || "");
+
+  if (currentBookingId === bookingId) {
+    return matchingBooking;
+  }
+
+  draft.checkout = {
+    ...(draft.checkout?.toObject ? draft.checkout.toObject() : draft.checkout || {}),
+    bookingId: matchingBooking._id,
+    gateway: safeString(matchingBooking?.payment?.gateway),
+    paymentMethod:
+      safeString(draft?.checkout?.paymentMethod || matchingBooking?.payment?.method || "upi") || "upi",
+    paymentStatus: safeString(matchingBooking?.payment?.status || draft?.checkout?.paymentStatus || "pending"),
+    lastPreparedAt: matchingBooking.updatedAt || new Date(),
+  };
+  draft.lastActivityAt = new Date();
+  await draft.save();
+
+  if (String(matchingBooking?.sourceDraftId || "") !== String(draft?._id || "")) {
+    matchingBooking.sourceDraftId = draft._id;
+    await matchingBooking.save();
+    await TempBooking.updateMany(
+      {
+        bookingId: matchingBooking._id,
+      },
+      {
+        $set: {
+          draftId: draft._id,
+        },
+      },
+    );
+  }
+
+  return matchingBooking;
+}
+
 async function hydrateDraftResponse(draft) {
+  if (draft?.owner?.userId) {
+    await adoptResumableCheckoutBooking(draft);
+  }
+
   const serialized = serializeDraftDocument(draft);
   if (!serialized) return null;
 
@@ -564,6 +823,7 @@ async function hydrateDraftResponse(draft) {
     ...serialized,
     livePricingSummary: liveState.pricingSummary,
     validation: liveState.validation,
+    draftStage: liveState.draftStage || serialized.draftStage || "checkout",
   };
 }
 
@@ -599,30 +859,76 @@ export async function claimGuestBookingDraftsForUser({ guestToken, userId }) {
 
 export async function listBookingDraftsForActor(
   actor,
-  { status = "active", limit = 10 } = {},
+  { status = "active", limit = 10, page = 1, draftStage = "", focusId = "" } = {},
 ) {
   const scope = bookingDraftScope(actor);
   if (!scope) {
-    return { success: true, data: { drafts: [] } };
+    return {
+      success: true,
+      data: {
+        drafts: [],
+        pagination: {
+          page: 1,
+          limit: Math.max(1, Math.min(50, Number(limit || 10))),
+          total: 0,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      },
+    };
   }
 
-  const drafts = await BookingDraft.find({
+  const normalizedLimit = Math.max(1, Math.min(50, Number(limit || 10)));
+  let resolvedPage = Math.max(1, Number(page || 1));
+  const baseQuery = {
     ...scope,
     ...(status ? { status } : {}),
-  })
+    ...(draftStage ? { draftStage: normalizeDraftStage(draftStage) } : {}),
+  };
+
+  if (focusId && mongoose.Types.ObjectId.isValid(focusId)) {
+    const orderedIds = await BookingDraft.find(baseQuery)
+      .sort({ lastActivityAt: -1, updatedAt: -1 })
+      .select("_id")
+      .lean();
+    const focusedIndex = orderedIds.findIndex(
+      (item) => String(item?._id || "") === String(focusId),
+    );
+    if (focusedIndex >= 0) {
+      resolvedPage = Math.max(1, Math.floor(focusedIndex / normalizedLimit) + 1);
+    }
+  }
+
+  const total = await BookingDraft.countDocuments(baseQuery);
+  const totalPages = Math.max(1, Math.ceil(total / normalizedLimit) || 1);
+  if (resolvedPage > totalPages) {
+    resolvedPage = totalPages;
+  }
+
+  const drafts = await BookingDraft.find(baseQuery)
     .sort({ lastActivityAt: -1, updatedAt: -1 })
-    .limit(Math.max(1, Math.min(25, Number(limit || 10))))
+    .skip((resolvedPage - 1) * normalizedLimit)
+    .limit(normalizedLimit)
     .lean();
 
   return {
     success: true,
     data: {
       drafts,
+      pagination: {
+        page: resolvedPage,
+        limit: normalizedLimit,
+        total,
+        totalPages,
+        hasNextPage: resolvedPage < totalPages,
+        hasPrevPage: resolvedPage > 1,
+      },
     },
   };
 }
 
-export async function getMostRecentActiveBookingDraft(actor) {
+export async function getMostRecentActiveBookingDraft(actor, { draftStage = "checkout" } = {}) {
   const scope = bookingDraftScope(actor);
   if (!scope) {
     return { success: true, data: { draft: null } };
@@ -631,6 +937,7 @@ export async function getMostRecentActiveBookingDraft(actor) {
   const draft = await BookingDraft.findOne({
     ...scope,
     status: "active",
+    ...(draftStage ? { draftStage: normalizeDraftStage(draftStage) } : {}),
   }).sort({ lastActivityAt: -1, updatedAt: -1 });
 
   return {
@@ -676,12 +983,55 @@ export async function createBookingDraftForActor(actor, payload = {}) {
   });
   const now = new Date();
 
+  if (hasCheckoutSelection(materialized)) {
+    const activeDrafts = await BookingDraft.find({
+      ...scope,
+      status: "active",
+      draftStage: materialized.draftStage,
+      "space.spaceId": materialized?.space?.spaceId,
+    }).sort({ lastActivityAt: -1, updatedAt: -1 });
+
+    const reusableDraft =
+      activeDrafts.find(
+        (existingDraft) =>
+          buildDraftMatchingSignature(existingDraft) === buildDraftMatchingSignature(materialized),
+      ) || null;
+
+    if (reusableDraft) {
+      reusableDraft.space = materialized.space;
+      reusableDraft.selection = materialized.selection;
+      reusableDraft.resources = materialized.resources;
+      reusableDraft.addons = materialized.addons;
+      reusableDraft.pricingSummary = materialized.pricingSummary;
+      reusableDraft.specialRequests = materialized.specialRequests;
+      reusableDraft.validation = materialized.validation;
+      reusableDraft.checkout = {
+        ...(reusableDraft.checkout?.toObject ? reusableDraft.checkout.toObject() : reusableDraft.checkout || {}),
+        paymentMethod:
+          safeString(payload?.checkout?.paymentMethod || payload?.paymentMethod || reusableDraft.checkout?.paymentMethod || "upi") || "upi",
+      };
+      reusableDraft.lastActivityAt = now;
+      reusableDraft.expiresAt = buildDraftExpiryDate(now);
+      reusableDraft.sourceRoute = safeString(payload?.sourceRoute || reusableDraft.sourceRoute);
+      reusableDraft.version = Number(reusableDraft.version || 0) + 1;
+      await reusableDraft.save();
+
+      return {
+        success: true,
+        data: {
+          draft: await hydrateDraftResponse(reusableDraft),
+        },
+      };
+    }
+  }
+
   const draft = await BookingDraft.create({
     owner: {
       userId: actor?.userId ? normalizeObjectId(actor.userId) : null,
       guestToken: actor?.guestToken ? safeString(actor.guestToken) : null,
     },
     status: "active",
+    draftStage: materialized.draftStage,
     space: materialized.space,
     selection: materialized.selection,
     resources: materialized.resources,
@@ -759,8 +1109,12 @@ export async function updateBookingDraftForActor(
         : draft.specialRequests,
     owner: actor,
   });
+  const previousSignature = buildDraftMatchingSignature(draft);
+  const nextSignature = buildDraftMatchingSignature(materialized);
+  const bookingSelectionChanged = previousSignature !== nextSignature;
 
   draft.status = "active";
+  draft.draftStage = materialized.draftStage;
   draft.space = materialized.space;
   draft.selection = materialized.selection;
   draft.resources = materialized.resources;
@@ -768,10 +1122,12 @@ export async function updateBookingDraftForActor(
   draft.pricingSummary = materialized.pricingSummary;
   draft.specialRequests = materialized.specialRequests;
   draft.validation = materialized.validation;
+  const existingCheckout =
+    draft.checkout?.toObject ? draft.checkout.toObject() : draft.checkout || {};
   draft.checkout = {
-    ...(draft.checkout?.toObject ? draft.checkout.toObject() : draft.checkout || {}),
+    ...(bookingSelectionChanged ? {} : existingCheckout),
     paymentMethod:
-      safeString(payload?.checkout?.paymentMethod || payload?.paymentMethod || draft.checkout?.paymentMethod || "upi") || "upi",
+      safeString(payload?.checkout?.paymentMethod || payload?.paymentMethod || existingCheckout?.paymentMethod || "upi") || "upi",
   };
   draft.lastActivityAt = new Date();
   draft.expiresAt = buildDraftExpiryDate(draft.lastActivityAt);
@@ -808,6 +1164,7 @@ export async function cancelBookingDraftForActor(
   }
 
   draft.status = "cancelled";
+  draft.draftStage = "cancelled";
   draft.cancelledAt = new Date();
   draft.cancelReason = safeString(reason || "cancelled_by_user");
   draft.version = Number(draft.version || 0) + 1;
@@ -828,6 +1185,18 @@ function buildCheckoutBookingPayload(draft, userId, paymentMethod, specialReques
   const resources = Array.isArray(draft?.resources) ? draft.resources : [];
   const addons = Array.isArray(draft?.addons) ? draft.addons : [];
   const planId = draft?.selection?.planId || draft?.planId || null;
+  const pricingSummary = draft?.livePricingSummary || draft?.pricingSummary || {};
+  const primaryResourceId = safeString(
+    draft?.selection?.primaryItem?.source === "resource"
+      ? draft?.selection?.primaryItem?.id
+      : draft?.resources?.[0]?.resourceId,
+  );
+  const orderedResources = [...resources].sort((left, right) => {
+    const leftIsPrimary = String(left?.resourceId || "") === primaryResourceId;
+    const rightIsPrimary = String(right?.resourceId || "") === primaryResourceId;
+    if (leftIsPrimary === rightIsPrimary) return 0;
+    return leftIsPrimary ? -1 : 1;
+  });
 
   return {
     userId,
@@ -839,7 +1208,7 @@ function buildCheckoutBookingPayload(draft, userId, paymentMethod, specialReques
       planId: planId || null,
       type: bookingType,
     },
-    resources: resources.map((item) => ({
+    resources: orderedResources.map((item) => ({
       resourceId: item.resourceId,
       name: item.name,
       type: item.type,
@@ -867,8 +1236,16 @@ function buildCheckoutBookingPayload(draft, userId, paymentMethod, specialReques
     payment: {
       method: paymentMethod || draft?.checkout?.paymentMethod || "upi",
     },
-    totalAmount: Number(draft?.pricingSummary?.totalAmount || 0),
-    couponCode: safeString(draft?.pricingSummary?.couponCode).toUpperCase() || null,
+    totalAmount: Number(pricingSummary?.totalAmount || 0),
+    couponCode: safeString(pricingSummary?.couponCode).toUpperCase() || null,
+    priceBreakdown: {
+      basePrice: Number(pricingSummary?.basePrice || 0),
+      gstPercentage: Number(pricingSummary?.gstPercentage || DEFAULT_GST_PERCENTAGE),
+      gstAmount: Number(pricingSummary?.gstAmount || 0),
+      discount: Number(pricingSummary?.discount || 0),
+      totalAmount: Number(pricingSummary?.totalAmount || 0),
+      currency: safeString(pricingSummary?.currency || "INR") || "INR",
+    },
     purchaseIntent:
       draft?.selection?.purchaseIntent === "PLAN_MEMBERSHIP"
         ? "PLAN_MEMBERSHIP"
@@ -920,6 +1297,7 @@ export async function checkoutBookingDraftForUser(
 
     if (linkedBooking?.payment?.status === "paid" || linkedBooking?.status === "confirmed") {
       draft.status = "completed";
+      draft.draftStage = "completed";
       draft.completedAt = new Date();
       draft.checkout.paymentStatus = linkedBooking.payment?.status || "paid";
       draft.version = Number(draft.version || 0) + 1;
@@ -948,6 +1326,8 @@ export async function checkoutBookingDraftForUser(
       return retryResult;
     }
   }
+
+  draft.draftStage = "checkout";
 
   const bookingPayload = buildCheckoutBookingPayload(
     hydratedDraft,
@@ -982,6 +1362,7 @@ export async function markBookingDraftCompleted(sourceDraftId, paymentStatus = "
     {
       $set: {
         status: "completed",
+        draftStage: "completed",
         completedAt: new Date(),
         "checkout.paymentStatus": paymentStatus,
         lastActivityAt: new Date(),
@@ -1006,6 +1387,9 @@ export async function expireStaleBookingDrafts({ now = new Date(), batchSize = 1
 
   for (const draft of drafts) {
     draft.status = "expired";
+    if (draft.draftStage !== "completed" && draft.draftStage !== "cancelled") {
+      draft.draftStage = "cancelled";
+    }
     draft.version = Number(draft.version || 0) + 1;
     await draft.save();
     expiredCount += 1;

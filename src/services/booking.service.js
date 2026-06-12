@@ -186,7 +186,34 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
     });
 
     durableBooking = booking;
-    const originalAmount = Number(booking.priceBreakdown?.totalAmount || 0);
+    const trustedBasePrice = Number(bookingData?.priceBreakdown?.basePrice);
+    const trustedGstAmount = Number(bookingData?.priceBreakdown?.gstAmount);
+    const trustedDeposit = Number(bookingData?.priceBreakdown?.deposit || 0) || 0;
+    const trustedGstPercentage = Number(
+      bookingData?.priceBreakdown?.gstPercentage || booking.priceBreakdown?.gstPercentage || 18,
+    );
+    const hasTrustedDraftPricing =
+      Number.isFinite(trustedBasePrice) &&
+      trustedBasePrice >= 0 &&
+      Number.isFinite(trustedGstAmount) &&
+      trustedGstAmount >= 0;
+
+    if (hasTrustedDraftPricing) {
+      booking.priceBreakdown.basePrice = Math.round(trustedBasePrice);
+      booking.priceBreakdown.gstPercentage = trustedGstPercentage;
+      booking.priceBreakdown.gstAmount = Math.round(trustedGstAmount);
+      booking.priceBreakdown.deposit = trustedDeposit;
+      booking.priceBreakdown.discount = 0;
+      booking.priceBreakdown.totalAmount =
+        Math.round(trustedBasePrice) + Math.round(trustedGstAmount) + trustedDeposit;
+      await booking.save();
+    }
+
+    const originalAmount = hasTrustedDraftPricing
+      ? Number(booking.priceBreakdown?.basePrice || 0) +
+        Number(booking.priceBreakdown?.gstAmount || 0) +
+        Number(booking.priceBreakdown?.deposit || 0)
+      : Number(booking.priceBreakdown?.totalAmount || 0);
     if (originalAmount <= 0) {
       booking.status = "expired";
       booking.holdExpiresAt = null;
@@ -356,6 +383,18 @@ async function resolveCheckoutItems({
   const verifiedAddons = requestedAddons.map((requested) => {
     const addon = addonMap.get(String(requested.addonId));
     if (!addon) throw new Error("Selected add-on is unavailable");
+    if (
+      String(addon.type || "").toLowerCase() === "shop" &&
+      addon.stock !== null &&
+      addon.stock !== undefined &&
+      requested.quantity > Number(addon.stock || 0)
+    ) {
+      throw new Error(
+        `${addon.title || "Selected add-on"} only has ${Number(addon.stock || 0)} item${
+          Number(addon.stock || 0) === 1 ? "" : "s"
+        } left in stock`,
+      );
+    }
     return {
       addonId: addon._id,
       name: addon.title,
@@ -449,6 +488,8 @@ async function initializeBookingPaymentSession({
       orderId: response.id,
       payment_session_id: response.id,
       key: gatewayResolved.credentials.keyId,
+      amount: Number(response.amount || Math.round(amount * 100)),
+      currency: response.currency || "INR",
       raw: response,
     };
   } else {

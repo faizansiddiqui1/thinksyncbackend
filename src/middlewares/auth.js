@@ -123,7 +123,7 @@ export const loadUserProfile = async (req, res, next) => {
     }
 
     const profile = await User.findById(req.user._id).select(
-      "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone role phoneVerified emailVerified kyc isActive outlookConnected outlookEmail calendarProvider createdAt updatedAt"
+      "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone pendingRecoveryEmail pendingRecoveryPhone recoveryEmail recoveryPhone recoveryEmailVerified recoveryPhoneVerified role phoneVerified emailVerified securityPreferences kyc isActive outlookConnected outlookEmail calendarProvider createdAt updatedAt"
     );
 
     if (!profile) {
@@ -140,6 +140,17 @@ export const loadUserProfile = async (req, res, next) => {
   }
 };
 
+export const loadAdminProfileOptional = async (req, res, next) => {
+  try {
+    const profile = await AdminProfile.findOne({ owner: req.user._id });
+    req.adminProfile = profile || null;
+    next();
+  } catch (err) {
+    console.error("loadAdminProfileOptional error:", err);
+    return res.status(500).json({ message: "Error loading admin profile" });
+  }
+};
+
 
 export const requireAdminAccess = async (req, res, next) => {
   try {
@@ -149,6 +160,10 @@ export const requireAdminAccess = async (req, res, next) => {
 
     // ✅ Super Admin → FULL ACCESS (no KYC)
     if (req.user.role === "super_admin") {
+      return next();
+    }
+
+    if (req.user.role === "consultant") {
       return next();
     }
 

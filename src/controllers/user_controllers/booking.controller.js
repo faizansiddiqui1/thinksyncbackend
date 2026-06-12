@@ -3,6 +3,7 @@ import { validationResult } from "express-validator";
 
 import crypto from "crypto";
 import TempBooking from "../../models/user_models/TempBooking.js";
+import Booking from "../../models/user_models/Booking.js";
 import { getTenantIdFromSpace } from "../../utils/getTenantIdFromSpace.js";
 import { resolveGateway } from "../../services/paymentGatewayResolver.service.js";
 import { finalizeTempBooking } from "../../services/bookingFinalize.service.js";
@@ -75,18 +76,27 @@ export const verifyRazorpayPayment = async (req, res) => {
     const temp = await TempBooking.findOne({
       orderId: razorpay_order_id,
     });
+    const linkedBooking =
+      (temp?.bookingId ? await Booking.findById(temp.bookingId) : null) ||
+      (await Booking.findOne({
+        $or: [
+          { "payment.reference": razorpay_order_id },
+          { "payment.attempts.orderId": razorpay_order_id },
+        ],
+      }));
 
-    if (!temp) {
+    if (!temp && !linkedBooking) {
       console.log("❌ Temp not found for:", razorpay_order_id);
       return res.status(404).json({
         success: false,
-        error: "Temp booking not found",
+        error: "Payment session not found",
       });
     }
 
     const bookingUserId =
-      temp.bookingData?.user?.userId ||
-      temp.bookingData?.userId ||
+      temp?.bookingData?.user?.userId ||
+      temp?.bookingData?.userId ||
+      linkedBooking?.user?.userId ||
       null;
 
     if (
@@ -99,7 +109,15 @@ export const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    const tenantId = await getTenantIdFromSpace(temp.bookingData.space);
+    const spaceId = temp?.bookingData?.space || linkedBooking?.space || null;
+    if (!spaceId) {
+      return res.status(400).json({
+        success: false,
+        error: "Payment session is missing workspace information",
+      });
+    }
+
+    const tenantId = await getTenantIdFromSpace(spaceId);
     const gateway = await resolveGateway(tenantId);
 
     if (!gateway?.credentials?.keySecret) {

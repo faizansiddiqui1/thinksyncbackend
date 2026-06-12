@@ -54,6 +54,12 @@ const ENTITY_UPLOAD_CONFIG = {
     extensions: IMAGE_ALLOWED_EXTENSIONS,
     maxBytes: IMAGE_MAX_BYTES,
   },
+  user: {
+    prefix: (entityId) => `users/${entityId}/avatar`,
+    mimeTypes: IMAGE_ALLOWED_MIME_TYPES,
+    extensions: IMAGE_ALLOWED_EXTENSIONS,
+    maxBytes: IMAGE_MAX_BYTES,
+  },
   city_document: {
     prefix: (entityId) => `documents/cities/${entityId}`,
     mimeTypes: DOCUMENT_ALLOWED_MIME_TYPES,

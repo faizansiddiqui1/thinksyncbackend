@@ -9,15 +9,32 @@ function getClientKey(req) {
   );
 }
 
-function sendRateLimitResponse(res, message) {
+function getIdentifierKey(req) {
+  const identifier =
+    req.body?.identifier ||
+    req.body?.email ||
+    req.body?.phoneNumber ||
+    req.body?.phone ||
+    "";
+
+  return `${getClientKey(req)}:${String(identifier).trim().toLowerCase() || "anonymous"}`;
+}
+
+function sendRateLimitResponse(res, message, retryAfter = 0) {
   if (typeof message === "string") {
-    return res.status(429).json({ message });
+    return res.status(429).json({
+      message,
+      retryAfterSeconds: retryAfter,
+    });
   }
 
   return res.status(429).json(
-    message || {
-      success: false,
-      error: "Too many requests, please try again later",
+    {
+      ...(message || {
+        success: false,
+        error: "Too many requests, please try again later",
+      }),
+      retryAfterSeconds: retryAfter,
     },
   );
 }
@@ -86,7 +103,7 @@ function createDynamicRateLimiter({
 
       if (record.count > max) {
         res.setHeader("Retry-After", String(retryAfter));
-        return sendRateLimitResponse(res, message);
+        return sendRateLimitResponse(res, message, retryAfter);
       }
 
       return next();
@@ -111,6 +128,15 @@ export const otpRateLimiter = createDynamicRateLimiter({
   defaultWindowMs: 15 * 60 * 1000,
   defaultMax: 5,
   message: "Too many OTP requests, please try again later.",
+});
+
+export const otpSendRateLimiter = createDynamicRateLimiter({
+  windowKey: null,
+  maxKey: null,
+  defaultWindowMs: 45 * 1000,
+  defaultMax: 3,
+  message: "Too many OTP requests, please wait before requesting a new code.",
+  keyGenerator: getIdentifierKey,
 });
 
 export const generalLimiter = createDynamicRateLimiter({

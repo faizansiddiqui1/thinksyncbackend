@@ -154,6 +154,12 @@ const bookingDraftSchema = new Schema(
       default: "active",
       index: true,
     },
+    draftStage: {
+      type: String,
+      enum: ["cart", "availability", "checkout", "completed", "cancelled"],
+      default: "checkout",
+      index: true,
+    },
     space: {
       type: draftSpaceSchema,
       required: true,
@@ -225,6 +231,8 @@ const bookingDraftSchema = new Schema(
 
 bookingDraftSchema.index({ "owner.userId": 1, status: 1, lastActivityAt: -1 });
 bookingDraftSchema.index({ "owner.guestToken": 1, status: 1, lastActivityAt: -1 });
+bookingDraftSchema.index({ "owner.userId": 1, draftStage: 1, status: 1, lastActivityAt: -1 });
+bookingDraftSchema.index({ "owner.guestToken": 1, draftStage: 1, status: 1, lastActivityAt: -1 });
 bookingDraftSchema.index({ status: 1, expiresAt: 1 });
 
 export default mongoose.model("BookingDraft", bookingDraftSchema);

@@ -43,6 +43,128 @@ const KycSchema = new Schema({
   config: { type: KycConfigSchema, default: () => ({}) },
 });
 
+const RecoveryChannelSchema = new Schema(
+  {
+    value: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    verified: {
+      type: Boolean,
+      default: false,
+    },
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
+const EmergencyContactSchema = new Schema(
+  {
+    name: { type: String, trim: true, default: "" },
+    relation: { type: String, trim: true, default: "" },
+    email: { type: String, trim: true, lowercase: true, default: "" },
+    phone: { type: String, trim: true, default: "" },
+  },
+  { _id: false },
+);
+
+const NotificationSchema = new Schema(
+  {
+    securityAlerts: { type: Boolean, default: true },
+    approvalTasks: { type: Boolean, default: true },
+    bookingAlerts: { type: Boolean, default: true },
+    billingAlerts: { type: Boolean, default: false },
+    operationsAlerts: { type: Boolean, default: true },
+  },
+  { _id: false },
+);
+
+const PreferenceSchema = new Schema(
+  {
+    defaultDashboard: { type: String, trim: true, default: "" },
+    timezone: { type: String, trim: true, default: "Asia/Calcutta" },
+    locale: { type: String, trim: true, default: "en-IN" },
+  },
+  { _id: false },
+);
+
+const SecuritySchema = new Schema(
+  {
+    twoFactorEnabled: { type: Boolean, default: false },
+    twoFactorMethod: {
+      type: String,
+      enum: ["none", "totp", "otp"],
+      default: "none",
+    },
+    trustedDevices: {
+      type: [
+        new Schema(
+          {
+            label: { type: String, trim: true, default: "" },
+            fingerprint: { type: String, trim: true, default: "" },
+            lastSeenAt: { type: Date, default: null },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    lastSecurityReviewAt: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
+const RoleScopeSchema = new Schema(
+  {
+    linkedCompanyIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "Company" }],
+      default: [],
+    },
+    linkedWorkspaceIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "Space" }],
+      default: [],
+    },
+    consultantScope: {
+      assignedCityIds: {
+        type: [{ type: Schema.Types.ObjectId, ref: "City" }],
+        default: [],
+      },
+      productTypes: {
+        type: [String],
+        default: [],
+      },
+      spaceTypes: {
+        type: [String],
+        default: [],
+      },
+      listingModes: {
+        type: [String],
+        default: [],
+      },
+    },
+  },
+  { _id: false },
+);
+
+const AuditSchema = new Schema(
+  {
+    lastSensitiveProfileUpdateAt: {
+      type: Date,
+      default: null,
+    },
+    lastSensitiveProfileUpdatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
 const AdminProfileSchema = new Schema(
   {
     owner: {
@@ -50,6 +172,71 @@ const AdminProfileSchema = new Schema(
       ref: "User",
       required: true,
       unique: true,
+    },
+
+    adminType: {
+      type: String,
+      enum: ["admin", "super_admin", "company_admin", "consultant"],
+      default: "admin",
+    },
+
+    designation: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    department: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    staffCode: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    recovery: {
+      email: {
+        type: RecoveryChannelSchema,
+        default: () => ({}),
+      },
+      phone: {
+        type: RecoveryChannelSchema,
+        default: () => ({}),
+      },
+    },
+
+    emergencyContact: {
+      type: EmergencyContactSchema,
+      default: () => ({}),
+    },
+
+    notifications: {
+      type: NotificationSchema,
+      default: () => ({}),
+    },
+
+    preferences: {
+      type: PreferenceSchema,
+      default: () => ({}),
+    },
+
+    security: {
+      type: SecuritySchema,
+      default: () => ({}),
+    },
+
+    roleScope: {
+      type: RoleScopeSchema,
+      default: () => ({}),
+    },
+
+    audit: {
+      type: AuditSchema,
+      default: () => ({}),
     },
 
     company: {

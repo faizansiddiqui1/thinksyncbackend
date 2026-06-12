@@ -56,6 +56,9 @@ export const listBookingDrafts = async (req, res) => {
     const result = await listBookingDraftsForActor(actor, {
       status: req.query.status || "active",
       limit: req.query.limit || 10,
+      page: req.query.page || 1,
+      draftStage: req.query.draftStage || "",
+      focusId: req.query.focusId || "",
     });
 
     return res.json(result);
@@ -67,7 +70,9 @@ export const listBookingDrafts = async (req, res) => {
 export const getActiveBookingDraft = async (req, res) => {
   try {
     const actor = resolveDraftActor(req, res);
-    const result = await getMostRecentActiveBookingDraft(actor);
+    const result = await getMostRecentActiveBookingDraft(actor, {
+      draftStage: req.query.draftStage || "checkout",
+    });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

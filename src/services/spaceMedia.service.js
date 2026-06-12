@@ -219,6 +219,8 @@ export const getPresignForImage = async (
     await ensureSeatingOptionExists(entityId);
   } else if (entity === "city_document") {
     await ensureCityExists(entityId);
+  } else if (entity === "user" && !userId) {
+    throw new Error("Authentication required");
   } else if (entity === "consultant" && !userId) {
     throw new Error("Authentication required");
   }

@@ -61,7 +61,7 @@ export const approveKyc = async (req, res) => {
     return res.status(404).json({ message: "Admin profile not found" });
   }
 
-  if (req.user.role !== "super_admin" || req.user.role !== "admin") {
+  if (req.user.role !== "super_admin" && req.user.role !== "admin") {
     return res.status(403).json({ message: "Super admin or admin access required" });
   }
 

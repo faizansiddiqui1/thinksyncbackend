@@ -159,7 +159,6 @@ app.use("/api/payout", BookingRoutes);
 // Google OAuth
 app.use("/api/auth", googleAuthRoutes);
 app.use("/api/auth", outlookAuthRoutes);
-app.use("/api", outlookAuthRoutes);
 
 
 

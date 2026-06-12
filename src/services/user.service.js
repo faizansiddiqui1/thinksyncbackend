@@ -1,6 +1,5 @@
 // services/user.service.js
 import User from "../models/user_models/User.js";
-import { sendProfileOtp } from "./profile.service.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
 import { normalizeUsername } from "../utils/usernameUtils.js";
 import { getPresignForImage } from "./spaceMedia.service.js";
@@ -9,6 +8,11 @@ import {
   publicUrlForKey,
   resolveAwsConfig,
 } from "../config/s3.js";
+import {
+  logSecurityEvent,
+  SECURITY_EVENT_TYPES,
+} from "./securityEvent.service.js";
+import { sendProfileOtp } from "./profile.service.js";
 
 const PROFILE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const PROFILE_IMAGE_TYPES = new Set([
@@ -51,9 +55,58 @@ export const ensureUsernameAvailable = async (username, exceptUserId = null) => 
   }
 };
 
+const ensurePrimaryIdentifierAvailable = async ({
+  userId,
+  email,
+  phoneNumber,
+}) => {
+  if (email) {
+    const existing = await User.findOne({
+      _id: { $ne: userId },
+      $or: [{ email }, { pendingEmail: email }],
+    }).lean();
+
+    if (existing) {
+      throw new Error("Email already in use");
+    }
+  }
+
+  if (phoneNumber) {
+    const existing = await User.findOne({
+      _id: { $ne: userId },
+      $or: [{ phoneNumber }, { pendingPhone: phoneNumber }],
+    }).lean();
+
+    if (existing) {
+      throw new Error("Phone number already in use");
+    }
+  }
+};
+
 export const updateUserProfile = async (userId, updates = {}) => {
-  const user = await User.findById(userId);
+  const needsPasswordForSensitiveAction = Boolean(
+    updates.email !== undefined ||
+      updates.phoneNumber !== undefined ||
+      updates.recoveryEmail !== undefined ||
+      updates.recoveryPhone !== undefined,
+  );
+
+  const user = await User.findById(userId).select(
+    needsPasswordForSensitiveAction ? "+password" : "",
+  );
   if (!user) throw new Error("User not found");
+
+  if (needsPasswordForSensitiveAction && user.password) {
+    const currentPassword = String(updates.currentPassword || "");
+    if (!currentPassword) {
+      throw new Error("Current password is required for contact changes");
+    }
+
+    const isValid = await user.comparePassword(currentPassword);
+    if (!isValid) {
+      throw new Error("Current password is incorrect");
+    }
+  }
 
   const payload = {};
 
@@ -87,11 +140,12 @@ export const updateUserProfile = async (userId, updates = {}) => {
   if (updates.email !== undefined) {
     const newEmail = updates.email ? String(updates.email).trim().toLowerCase() : null;
     if (newEmail && newEmail !== user.email) {
-      // send OTP and save pendingEmail (handled by sendProfileOtp)
-      await sendProfileOtp(userId, newEmail);
-      // Do not set payload.email directly; sendProfileOtp saves pendingEmail on user
+      await ensurePrimaryIdentifierAvailable({ userId, email: newEmail });
+      user.pendingEmail = newEmail;
+      user.pendingEmailRequestedAt = new Date();
+      await user.save();
       return {
-        message: "Pending email set. Verify the email with OTP.",
+        message: "Pending email saved. Send OTP from the verification popup to continue.",
         pending: true,
         pendingType: "email",
         pendingIdentifier: newEmail,
@@ -105,12 +159,74 @@ export const updateUserProfile = async (userId, updates = {}) => {
     const raw = updates.phoneNumber ? String(updates.phoneNumber).trim() : null;
     const newPhone = raw ? normalizePhone(raw) : null;
     if (newPhone && newPhone !== user.phoneNumber) {
-      await sendProfileOtp(userId, newPhone);
+      await ensurePrimaryIdentifierAvailable({ userId, phoneNumber: newPhone });
+      user.pendingPhone = newPhone;
+      user.pendingPhoneRequestedAt = new Date();
+      await user.save();
       return {
-        message: "Pending phone set. Verify the phone with OTP.",
+        message: "Pending phone saved. Send OTP from the verification popup to continue.",
         pending: true,
         pendingType: "phone",
         pendingIdentifier: newPhone,
+        user: user.toJSON(),
+      };
+    }
+  }
+
+  if (updates.recoveryEmail !== undefined) {
+    const nextRecoveryEmail = String(updates.recoveryEmail || "").trim().toLowerCase();
+    if (!nextRecoveryEmail) {
+      const hadRecoveryEmail = Boolean(user.recoveryEmail || user.pendingRecoveryEmail);
+      user.recoveryEmail = "";
+      user.recoveryEmailVerified = false;
+      user.pendingRecoveryEmail = "";
+      user.pendingRecoveryEmailRequestedAt = undefined;
+      if (hadRecoveryEmail) {
+        await logSecurityEvent({
+          userId,
+          actorId: userId,
+          eventType: SECURITY_EVENT_TYPES.RECOVERY_CONTACT_REMOVED,
+          metadata: { channel: "email" },
+        });
+      }
+      await user.save();
+    } else if (nextRecoveryEmail !== user.recoveryEmail) {
+      await sendProfileOtp(userId, nextRecoveryEmail, { contactType: "recovery" });
+      return {
+        message: "Pending recovery email set. Verify the email with OTP.",
+        pending: true,
+        pendingType: "recovery_email",
+        pendingIdentifier: nextRecoveryEmail,
+        user: user.toJSON(),
+      };
+    }
+  }
+
+  if (updates.recoveryPhone !== undefined) {
+    const rawRecoveryPhone = String(updates.recoveryPhone || "").trim();
+    const nextRecoveryPhone = rawRecoveryPhone ? normalizePhone(rawRecoveryPhone) : "";
+    if (!nextRecoveryPhone) {
+      const hadRecoveryPhone = Boolean(user.recoveryPhone || user.pendingRecoveryPhone);
+      user.recoveryPhone = "";
+      user.recoveryPhoneVerified = false;
+      user.pendingRecoveryPhone = "";
+      user.pendingRecoveryPhoneRequestedAt = undefined;
+      if (hadRecoveryPhone) {
+        await logSecurityEvent({
+          userId,
+          actorId: userId,
+          eventType: SECURITY_EVENT_TYPES.RECOVERY_CONTACT_REMOVED,
+          metadata: { channel: "phone" },
+        });
+      }
+      await user.save();
+    } else if (nextRecoveryPhone !== user.recoveryPhone) {
+      await sendProfileOtp(userId, nextRecoveryPhone, { contactType: "recovery" });
+      return {
+        message: "Pending recovery phone set. Verify the phone with OTP.",
+        pending: true,
+        pendingType: "recovery_phone",
+        pendingIdentifier: nextRecoveryPhone,
         user: user.toJSON(),
       };
     }
@@ -147,6 +263,7 @@ export const createUserProfileImageUpload = async (
     String(userId),
     `profile.${extensionByType[String(contentType).toLowerCase()]}`,
     contentType,
+    size,
     String(userId),
     tenant,
   );
@@ -215,20 +332,29 @@ export const deleteUserProfileImage = async (userId, tenant = null) => {
 
 export const changeUserPassword = async (userId, currentPassword, newPassword) => {
   if (!currentPassword || !newPassword) throw new Error("Both current and new passwords are required");
+  if (String(newPassword).length < 8) {
+    throw new Error("New password must be at least 8 characters");
+  }
 
   const user = await User.findById(userId).select("+password");
   if (!user) throw new Error("User not found");
 
-  const match = await user.comparePassword(currentPassword); // implement or use bcrypt.compare
-  // if comparePassword method not present:
-  // const match = await bcrypt.compare(currentPassword, user.password);
-
+  const match = await user.comparePassword(currentPassword);
   if (!match) throw new Error("Current password is incorrect");
 
-  // hash new password (if model uses pre-save hook, simply set)
   user.password = newPassword;
-  // ensure update mechanism hashes password; otherwise hash here with bcrypt
+  user.securityPreferences = {
+    ...(user.securityPreferences || {}),
+    lastSecurityReviewAt: new Date(),
+  };
+  user.trustedDevices = [];
   await user.save();
+
+  await logSecurityEvent({
+    userId,
+    actorId: userId,
+    eventType: SECURITY_EVENT_TYPES.PASSWORD_CHANGED,
+  });
 
   return { message: "Password changed successfully" };
 };

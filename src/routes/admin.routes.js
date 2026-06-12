@@ -5,15 +5,19 @@ import {
   requireAdminAccess,
   requirePermission,
   loadAdminProfile,
+  loadAdminProfileOptional,
 } from "../middlewares/auth.js";
 
 // Controllers (adjust paths)
 import {
-  getAdminProfile,
   submitKyc,
   approveKyc,
   rejectKyc,
 } from "../controllers/admin_controllers/kyc.controller.js";
+import {
+  getAdminProfileHandler,
+  updateAdminProfileHandler,
+} from "../controllers/admin_controllers/adminProfile.controller.js";
 import { getOwnerDashboard } from "../controllers/admin_controllers/dashboard.controller.js";
 
 import * as roleController from "../controllers/super_admin_controllers/role.controller.js";
@@ -23,7 +27,8 @@ const router = express.Router();
 // ────────────────────────────────────────────────
 // Profile & KYC Routes
 // ────────────────────────────────────────────────
-router.get("/profile", requireAuth, loadAdminProfile, getAdminProfile);
+router.get("/profile", requireAuth, loadAdminProfileOptional, getAdminProfileHandler);
+router.put("/profile", requireAuth, requireAdminAccess, loadAdminProfileOptional, updateAdminProfileHandler);
 
 router.post("/kyc/submit", requireAuth, loadAdminProfile, submitKyc);
 

@@ -1,4 +1,5 @@
 // models/User.js
+import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 
 const { Schema } = mongoose;
@@ -18,6 +19,143 @@ const RefreshTokenSchema = new Schema({
   },
   lastUsedAt: Date,
 });
+
+const PasswordResetSchema = new Schema(
+  {
+    channel: {
+      type: String,
+      enum: ["email", "phone"],
+      default: null,
+    },
+    target: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    otpHash: {
+      type: String,
+      default: "",
+      select: false,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    attempts: {
+      type: Number,
+      default: 0,
+    },
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
+    allowUntil: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
+const BackupCodeSchema = new Schema(
+  {
+    codeHash: {
+      type: String,
+      required: true,
+      select: false,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+    usedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
+const TwoFactorSchema = new Schema(
+  {
+    secretEncrypted: {
+      type: String,
+      default: "",
+      select: false,
+    },
+    pendingSecretEncrypted: {
+      type: String,
+      default: "",
+      select: false,
+    },
+    pendingSecretCreatedAt: {
+      type: Date,
+      default: null,
+    },
+    enabledAt: {
+      type: Date,
+      default: null,
+    },
+    lastVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    backupCodes: {
+      type: [BackupCodeSchema],
+      default: [],
+      select: false,
+    },
+  },
+  { _id: false },
+);
+
+const TrustedDeviceSchema = new Schema(
+  {
+    tokenHash: {
+      type: String,
+      required: true,
+      select: false,
+    },
+    label: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    browser: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    os: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    ip: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    userAgent: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    trustedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    lastUsedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { timestamps: false },
+);
 
 const KycSchema = new Schema(
   {
@@ -181,6 +319,56 @@ const userSchema = new Schema(
     },
     pendingPhoneRequestedAt: Date,
 
+    pendingRecoveryEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: "",
+    },
+    pendingRecoveryEmailRequestedAt: Date,
+
+    pendingRecoveryPhone: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    pendingRecoveryPhoneRequestedAt: Date,
+
+    recoveryEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          return !v || /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/.test(v);
+        },
+        message: "Please provide a valid recovery email address",
+      },
+    },
+
+    recoveryPhone: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          return !v || /^\+?[\d\s\-()]+$/.test(v);
+        },
+        message: "Please provide a valid recovery phone number",
+      },
+    },
+
+    recoveryEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    recoveryPhoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+
     password: {
       type: String,
       select: false, // hide by default
@@ -188,6 +376,42 @@ const userSchema = new Schema(
 
     phoneVerified: { type: Boolean, default: false },
     emailVerified: { type: Boolean, default: false },
+    securityPreferences: {
+      emailLoginEnabled: {
+        type: Boolean,
+        default: true,
+      },
+      phoneLoginEnabled: {
+        type: Boolean,
+        default: true,
+      },
+      twoFactorEnabled: {
+        type: Boolean,
+        default: false,
+      },
+      twoFactorMethod: {
+        type: String,
+        enum: ["none", "totp", "otp"],
+        default: "none",
+      },
+      lastSecurityReviewAt: {
+        type: Date,
+        default: null,
+      },
+    },
+    passwordReset: {
+      type: PasswordResetSchema,
+      default: () => ({}),
+    },
+    twoFactor: {
+      type: TwoFactorSchema,
+      default: () => ({}),
+    },
+    trustedDevices: {
+      type: [TrustedDeviceSchema],
+      default: [],
+      select: false,
+    },
     role: {
       type: String,
       enum: ["user", "admin", "super_admin", "pending_admin", "consultant"],
@@ -257,6 +481,31 @@ userSchema.virtual("isLocked").get(function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
+userSchema.pre("save", async function (next) {
+  try {
+    if (this.email) this.email = this.email.trim().toLowerCase();
+    if (this.recoveryEmail) this.recoveryEmail = this.recoveryEmail.trim().toLowerCase();
+    if (this.pendingRecoveryEmail) {
+      this.pendingRecoveryEmail = this.pendingRecoveryEmail.trim().toLowerCase();
+    }
+
+    if (!this.isModified("password") || !this.password) {
+      return next();
+    }
+
+    const salt = await bcrypt.genSalt(12);
+    this.password = await bcrypt.hash(this.password, salt);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
+
+userSchema.methods.comparePassword = function (candidatePassword) {
+  if (!this.password || !candidatePassword) return false;
+  return bcrypt.compare(String(candidatePassword), this.password);
+};
+
 userSchema.methods.incLoginAttempts = function () {
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
@@ -294,6 +543,9 @@ userSchema.methods.toJSON = function () {
   delete obj.loginAttempts;
   delete obj.lockUntil;
   delete obj.otpAttempts;
+  delete obj.passwordReset;
+  delete obj.twoFactor;
+  delete obj.trustedDevices;
   return obj;
 };
 

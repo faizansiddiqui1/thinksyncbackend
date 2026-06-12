@@ -16,7 +16,7 @@ import {
 import { buildUserKycPayload } from "../../services/verification.service.js";
 
 const USER_PROFILE_FIELDS =
-  "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone role phoneVerified emailVerified kyc isActive createdAt updatedAt";
+  "_id email username displayName bio website profileImage phoneNumber pendingEmail pendingPhone pendingRecoveryEmail pendingRecoveryPhone recoveryEmail recoveryPhone recoveryEmailVerified recoveryPhoneVerified role phoneVerified emailVerified securityPreferences kyc isActive createdAt updatedAt";
 
 export const getUserProfileHandler = async (req, res) => {
   try {
@@ -41,9 +41,10 @@ export const getUserProfileHandler = async (req, res) => {
 export const sendProfileOtpHandler = async (req, res) => {
   try {
     const identifier = req.body.identifier;
+    const contactType = req.body.contactType;
     if (!identifier)
       return res.status(400).json({ message: "Identifier required" });
-    await sendProfileOtp(req.user._id, identifier);
+    await sendProfileOtp(req.user._id, identifier, { contactType });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
@@ -52,9 +53,9 @@ export const sendProfileOtpHandler = async (req, res) => {
 
 export const confirmProfileOtpHandler = async (req, res) => {
   try {
-    const { identifier, otp } = req.body;
+    const { identifier, otp, contactType } = req.body;
     if (!identifier || !otp) return res.status(400).json({ message: "Identifier and OTP required" });
-    await confirmProfileOtp(req.user._id, identifier, otp);
+    await confirmProfileOtp(req.user._id, identifier, otp, { contactType });
     return res.json({ success: true, message: "Verified successfully" });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
@@ -75,9 +76,10 @@ export const updateProfileHandler = async (req, res) => {
         message: result.message,
         pendingType: result.pendingType,
         pendingIdentifier: result.pendingIdentifier,
-        data: result.user,
-      });
-    }
+      data: result.user,
+      pendingContactType: result.pendingType,
+    });
+  }
 
     // return updated user (sanitized)
     return res.json({

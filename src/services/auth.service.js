@@ -18,11 +18,24 @@ import { normalizePhone } from "../utils/phoneUtils.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
 import { syncAllActiveBookingsForUser } from "./calendarSync.service.js";
 import { normalizeUsername } from "../utils/usernameUtils.js";
+import {
+  createTwoFactorLoginChallenge,
+  getTrustedDeviceState,
+  readTwoFactorLoginChallenge,
+  rememberTrustedDevice,
+  touchTrustedDevice,
+  verifyTwoFactorCredential,
+} from "./accountSecurity.service.js";
+import {
+  logSecurityEvent,
+  SECURITY_EVENT_TYPES,
+} from "./securityEvent.service.js";
 
 async function getAuthRuntimeConfig() {
   const values = await getPlatformConfigValues([
     "OTP_EXPIRY_MINUTES",
     "OTP_MAX_RETRIES",
+    "ACCOUNT_LOCK_TIME_MS",
     "JWT_ACCESS_SECRET",
     "JWT_REFRESH_SECRET",
     "JWT_ACCESS_EXPIRY",
@@ -32,6 +45,7 @@ async function getAuthRuntimeConfig() {
   return {
     otpExpiryMinutes: Number(values.OTP_EXPIRY_MINUTES || 10),
     otpMaxRetries: Number(values.OTP_MAX_RETRIES || 3),
+    lockTimeMs: Number(values.ACCOUNT_LOCK_TIME_MS || 15 * 60 * 1000),
     accessSecret: values.JWT_ACCESS_SECRET,
     refreshSecret: values.JWT_REFRESH_SECRET,
     accessExpiry: values.JWT_ACCESS_EXPIRY || "60m",
@@ -262,6 +276,136 @@ const ensureAdminProfile = async (ownerId) => {
   });
 };
 
+function validatePasswordStrength(password = "") {
+  const value = String(password || "");
+  if (value.length < 8) {
+    throw new Error("Password must be at least 8 characters long");
+  }
+
+  const checks = [
+    /[A-Z]/.test(value),
+    /[a-z]/.test(value),
+    /\d/.test(value),
+    /[^A-Za-z0-9]/.test(value),
+  ].filter(Boolean).length;
+
+  if (checks < 3) {
+    throw new Error(
+      "Password must include at least three of: uppercase, lowercase, number, special character",
+    );
+  }
+}
+
+async function maybeStartTwoFactorChallenge(
+  user,
+  company,
+  sessionMeta = {},
+  trustedDeviceToken = "",
+) {
+  if (!user?.securityPreferences?.twoFactorEnabled) {
+    return null;
+  }
+
+  const trusted = await getTrustedDeviceState(user, trustedDeviceToken);
+  if (trusted.trusted) {
+    await touchTrustedDevice(user, trustedDeviceToken);
+    return null;
+  }
+
+  const challengeToken = await createTwoFactorLoginChallenge(user, sessionMeta);
+  return {
+    requiresTwoFactor: true,
+    challengeToken,
+    methods: ["totp", "backup_code"],
+    user: user.toJSON(),
+    company: company || user.companyId || null,
+  };
+}
+
+export async function finalizeAuthenticatedSession(
+  user,
+  sessionMeta = {},
+  { company = null } = {},
+) {
+  const authConfig = await getAuthRuntimeConfig();
+  const normalizedSession = sessionMeta || {};
+  const lastLoginBefore = user.lastLogin || null;
+
+  const accessToken = jwt.sign(
+    { userId: user._id },
+    authConfig.accessSecret,
+    { expiresIn: authConfig.accessExpiry },
+  );
+
+  const refreshToken = jwt.sign(
+    { userId: user._id },
+    authConfig.refreshSecret,
+    { expiresIn: authConfig.refreshExpiry },
+  );
+
+  const refreshTokenHash = crypto
+    .createHash("sha256")
+    .update(refreshToken)
+    .digest("hex");
+
+  user.refreshTokens = user.refreshTokens || [];
+  const newDevice = isNewDevice(
+    user,
+    normalizedSession.ip,
+    normalizedSession.userAgent,
+  );
+
+  user.refreshTokens.push({
+    token: refreshTokenHash,
+    ip: normalizedSession.ip,
+    userAgent: normalizedSession.userAgent,
+    createdAt: new Date(),
+    lastUsedAt: new Date(),
+  });
+  user.lastLogin = new Date();
+  user.loginAttempts = 0;
+  user.lockUntil = undefined;
+
+  await user.save();
+
+  if (newDevice && user.email) {
+    await sendNewDeviceLoginAlert({
+      email: user.email,
+      ip: normalizedSession.ip,
+      userAgent: normalizedSession.userAgent,
+      time: new Date(),
+    });
+    await logSecurityEvent({
+      userId: user._id,
+      actorId: user._id,
+      eventType: SECURITY_EVENT_TYPES.NEW_DEVICE_LOGIN,
+      ip: normalizedSession.ip,
+      userAgent: normalizedSession.userAgent,
+    });
+  }
+
+  await logSecurityEvent({
+    userId: user._id,
+    actorId: user._id,
+    eventType: SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
+    ip: normalizedSession.ip,
+    userAgent: normalizedSession.userAgent,
+  });
+
+  if (Boolean(user.email) && !lastLoginBefore && user.role === "user") {
+    sendWelcomeEmail({ user }).catch((error) => {
+      console.error("welcome email failed:", error.message);
+    });
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    user,
+    company: company || user.companyId || null,
+  };
+}
+
 export const sendOtp = async ({
   username,
   identifier,
@@ -361,6 +505,213 @@ export const sendLoginOTP = async (identifier, tenant = null) => {
   return sendOtp({ identifier, intent: "login", tenant });
 };
 
+export const registerWithPassword = async ({
+  username,
+  identifier,
+  password,
+  confirmPassword,
+  intent = "signup",
+  tenant = null,
+}) => {
+  const { isMail, email, phone } = resolveIdentifier(identifier);
+  const normalizedUsername = normalizeUsername(username, { required: true });
+  const normalizedIntent = String(intent || "signup").trim().toLowerCase();
+
+  if (!normalizedUsername) {
+    throw new Error("Username is required");
+  }
+
+  if (!password || !confirmPassword) {
+    throw new Error("Password and confirm password are required");
+  }
+
+  if (password !== confirmPassword) {
+    throw new Error("Password and confirm password must match");
+  }
+
+  validatePasswordStrength(password);
+
+  const existing = await findUserByIdentifier({ isMail, email, phone });
+  if (existing) {
+    throw new Error("Account already exists. Please login.");
+  }
+
+  await ensureUsernameAvailable(normalizedUsername);
+
+  const role = normalizedIntent === "admin-signup" ? "pending_admin" : "user";
+  const user = new User(
+    isMail
+      ? {
+          username: normalizedUsername,
+          email,
+          role,
+          password,
+        }
+      : {
+          username: normalizedUsername,
+          phoneNumber: phone,
+          role,
+          password,
+        },
+  );
+
+  await user.save();
+
+  if (normalizedIntent === "admin-signup") {
+    await ensureAdminProfile(user._id);
+  }
+
+  await issueOtp(user, isMail ? email : phone, isMail, tenant);
+
+  return {
+    success: true,
+    message: "Account created. Verify the OTP to activate login.",
+    role: user.role,
+    identifier: isMail ? email : phone,
+  };
+};
+
+export const loginWithPassword = async ({
+  identifier,
+  password,
+  sessionMeta = {},
+  intent = "login",
+  trustedDeviceToken = "",
+}) => {
+  if (!identifier || !password) {
+    throw new Error("Identifier and password are required");
+  }
+
+  const { isMail, email, phone } = resolveIdentifier(identifier);
+  const normalizedIntent = String(intent || "login").trim().toLowerCase();
+  let user = await findUserByIdentifier({ isMail, email, phone });
+
+  if (normalizedIntent === "admin-login") {
+    user = await syncConsultantLoginUser({ isMail, email, phone }, user);
+  }
+
+  if (!user) {
+    throw new Error("Invalid credentials");
+  }
+
+  user = await User.findById(user._id)
+    .select("+password +refreshTokens +twoFactor +trustedDevices")
+    .populate("companyId");
+
+  if (!user || user.isActive === false) {
+    throw new Error("Account disabled");
+  }
+
+  if (user.isLocked) {
+    throw new Error("Account locked. Try again later.");
+  }
+
+  if (!user.password) {
+    throw new Error("Password login is not enabled for this account yet");
+  }
+
+  const passwordMatch = await user.comparePassword(password);
+  if (!passwordMatch) {
+    await user.incLoginAttempts();
+    await logSecurityEvent({
+      userId: user._id,
+      actorId: user._id,
+      eventType: SECURITY_EVENT_TYPES.LOGIN_FAILED,
+      status: "failure",
+      ip: sessionMeta?.ip || "",
+      userAgent: sessionMeta?.userAgent || "",
+      metadata: {
+        reason: "invalid_password",
+      },
+    });
+    throw new Error("Invalid credentials");
+  }
+
+  if (user.loginAttempts > 0 || user.lockUntil) {
+    user.loginAttempts = 0;
+    user.lockUntil = undefined;
+  }
+
+  if (normalizedIntent === "admin-login") {
+    const allowedRoles = ["pending_admin", "admin", "super_admin", "consultant"];
+    const hasAdminRoleAccess = allowedRoles.includes(user.role);
+    const hasRbacAdminAccess = await hasAssignedRbacPermissions(user);
+    if (!hasAdminRoleAccess && !hasRbacAdminAccess) {
+      throw new Error("You are not authorized for admin login");
+    }
+  }
+
+  const twoFactorPending = await maybeStartTwoFactorChallenge(
+    user,
+    user.companyId || null,
+    sessionMeta,
+    trustedDeviceToken,
+  );
+
+  if (twoFactorPending) {
+    await user.save();
+    return twoFactorPending;
+  }
+
+  return finalizeAuthenticatedSession(user, sessionMeta, {
+    company: user.companyId || null,
+  });
+};
+
+export const completeTwoFactorLogin = async (
+  challengeToken,
+  { code, backupCode, rememberDevice = false, deviceLabel = "" } = {},
+  { trustedDeviceToken = "" } = {},
+) => {
+  if (!challengeToken) {
+    throw new Error("Two-factor challenge is required");
+  }
+
+  const payload = await readTwoFactorLoginChallenge(challengeToken);
+  if (payload?.purpose !== "two_factor_login" || !payload?.userId) {
+    throw new Error("Two-factor challenge is invalid");
+  }
+
+  const user = await User.findById(payload.userId)
+    .select("+refreshTokens +twoFactor +trustedDevices")
+    .populate("companyId");
+
+  if (!user || user.isActive === false) {
+    throw new Error("Account disabled");
+  }
+
+  const trusted = await getTrustedDeviceState(user, trustedDeviceToken);
+  if (trusted.trusted) {
+    await touchTrustedDevice(user, trustedDeviceToken);
+    return finalizeAuthenticatedSession(user, payload.sessionMeta || {}, {
+      company: user.companyId || null,
+    });
+  }
+
+  const verification = await verifyTwoFactorCredential(user, { code, backupCode });
+  if (!verification.success) {
+    throw new Error("Authenticator code or backup code is invalid");
+  }
+
+  let trustedDevice = null;
+  if (rememberDevice) {
+    trustedDevice = await rememberTrustedDevice(
+      user,
+      payload.sessionMeta || {},
+      deviceLabel,
+    );
+  }
+
+  const result = await finalizeAuthenticatedSession(user, payload.sessionMeta || {}, {
+    company: user.companyId || null,
+  });
+
+  return {
+    ...result,
+    trustedDevice,
+  };
+};
+
 export const verifyOTPAndCreateTokens = async (
   identifier,
   otp,
@@ -375,7 +726,9 @@ export const verifyOTPAndCreateTokens = async (
 
   const { isMail, email, phone } = resolveIdentifier(identifier);
 
-  const user = await findUserByIdentifier({ isMail, email, phone }).populate("companyId");
+  const user = await findUserByIdentifier({ isMail, email, phone })
+    .select("+refreshTokens +twoFactor +trustedDevices")
+    .populate("companyId");
 
   if (!user) throw new Error("User not found");
   if (user.isActive === false) throw new Error("Account disabled");
@@ -394,17 +747,27 @@ export const verifyOTPAndCreateTokens = async (
     user.otpAttempts += 1;
 
     if (user.otpAttempts >= authConfig.otpMaxRetries) {
-      user.isLocked = true;
+      user.lockUntil = Date.now() + authConfig.lockTimeMs;
     }
 
     await user.save();
+    await logSecurityEvent({
+      userId: user._id,
+      actorId: user._id,
+      eventType: SECURITY_EVENT_TYPES.LOGIN_FAILED,
+      status: "failure",
+      ip: sessionMeta?.ip || "",
+      userAgent: sessionMeta?.userAgent || "",
+      metadata: {
+        reason: "invalid_otp",
+      },
+    });
     throw new Error("Invalid OTP");
   }
 
   user.otpHash = undefined;
   user.otpExpires = undefined;
   user.otpAttempts = 0;
-  user.lastLogin = Date.now();
 
   if (isMail) {
     user.emailVerified = true;
@@ -449,62 +812,18 @@ export const verifyOTPAndCreateTokens = async (
     }
   }
 
-  const accessToken = jwt.sign(
-    { userId: user._id },
-    authConfig.accessSecret,
-    { expiresIn: authConfig.accessExpiry },
-  );
-
-  const refreshToken = jwt.sign(
-    { userId: user._id },
-    authConfig.refreshSecret,
-    { expiresIn: authConfig.refreshExpiry },
-  );
-
-  const refreshTokenHash = crypto
-    .createHash("sha256")
-    .update(refreshToken)
-    .digest("hex");
-
-  const shouldSendWelcomeEmail =
-    Boolean(user.email) &&
-    !user.lastLogin &&
-    !isAdminFlow;
-
-  user.refreshTokens = user.refreshTokens || [];
-
-  const sessionInfo = sessionMeta || {};
-  const newDevice = isNewDevice(user, sessionInfo.ip, sessionInfo.userAgent);
-
-  user.refreshTokens.push({
-    token: refreshTokenHash,
-    ip: sessionInfo.ip,
-    userAgent: sessionInfo.userAgent,
-    createdAt: new Date(),
-    lastUsedAt: new Date(),
-  });
-
-  if (newDevice && user.email) {
-    await sendNewDeviceLoginAlert({
-      email: user.email,
-      ip: sessionInfo.ip,
-      userAgent: sessionInfo.userAgent,
-      time: new Date(),
-    });
-  }
-
-  await user.save();
-
-  if (shouldSendWelcomeEmail) {
-    sendWelcomeEmail({ user }).catch((error) => {
-      console.error("welcome email failed:", error.message);
-    });
-  }
-
-  return {
-    accessToken,
-    refreshToken,
+  const twoFactorPending = await maybeStartTwoFactorChallenge(
     user,
-    company: user.companyId || null, // 🔥 ADD THIS
-  };
+    user.companyId || null,
+    sessionMeta,
+    options.trustedDeviceToken || "",
+  );
+  if (twoFactorPending) {
+    await user.save();
+    return twoFactorPending;
+  }
+
+  return finalizeAuthenticatedSession(user, sessionMeta, {
+    company: user.companyId || null,
+  });
 };

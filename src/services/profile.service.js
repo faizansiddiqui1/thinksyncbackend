@@ -1,26 +1,90 @@
-// services/profileVerify.service.js
-import User from "../models/user_models/User.js";
 import bcrypt from "bcryptjs";
+
+import User from "../models/user_models/User.js";
 import { generateOTP } from "../utils/otpUtils.js";
 import { sendVerifyOtpEmail } from "./mail.service.js";
 import { sendSMS } from "./sms.service.js";
 import { isEmail } from "../utils/validatorUtils.js";
 import { normalizePhone } from "../utils/phoneUtils.js";
 import { getPlatformConfigValues } from "./platformConfigResolver.service.js";
+import {
+  logSecurityEvent,
+  SECURITY_EVENT_TYPES,
+} from "./securityEvent.service.js";
 
 async function getProfileOtpConfig() {
   const values = await getPlatformConfigValues([
     "OTP_EXPIRY_MINUTES",
     "OTP_MAX_RETRIES",
+    "ACCOUNT_LOCK_TIME_MS",
   ]);
 
   return {
     otpExpiryMinutes: Number(values.OTP_EXPIRY_MINUTES || 10),
     otpMaxRetries: Number(values.OTP_MAX_RETRIES || 3),
+    lockTimeMs: Number(values.ACCOUNT_LOCK_TIME_MS || 15 * 60 * 1000),
   };
 }
 
-export const sendProfileOtp = async (userId, identifier) => {
+function normalizeIdentifier(identifier) {
+  const trimmed = String(identifier || "").trim();
+  const mail = isEmail(trimmed);
+  return {
+    isMail: mail,
+    target: mail ? trimmed.toLowerCase() : normalizePhone(trimmed),
+  };
+}
+
+function inferContactType(user, target, isMail, requestedType = "") {
+  const explicit = String(requestedType || "").trim().toLowerCase();
+  if (explicit === "recovery") return "recovery";
+  if (explicit === "primary") return "primary";
+
+  if (isMail) {
+    if (user.pendingRecoveryEmail && user.pendingRecoveryEmail === target) {
+      return "recovery";
+    }
+    return "primary";
+  }
+
+  if (user.pendingRecoveryPhone && user.pendingRecoveryPhone === target) {
+    return "recovery";
+  }
+  return "primary";
+}
+
+async function ensureIdentifierAvailable(userId, target, isMail) {
+  const query = isMail
+    ? {
+        _id: { $ne: userId },
+        $or: [
+          { email: target },
+          { recoveryEmail: target },
+          { pendingEmail: target },
+          { pendingRecoveryEmail: target },
+        ],
+      }
+    : {
+        _id: { $ne: userId },
+        $or: [
+          { phoneNumber: target },
+          { recoveryPhone: target },
+          { pendingPhone: target },
+          { pendingRecoveryPhone: target },
+        ],
+      };
+
+  const other = await User.findOne(query).lean();
+  if (other) {
+    throw new Error(isMail ? "Email already in use" : "Phone number already in use");
+  }
+}
+
+export const sendProfileOtp = async (
+  userId,
+  identifier,
+  options = {},
+) => {
   const otpConfig = await getProfileOtpConfig();
 
   if (!userId) throw new Error("User id required");
@@ -29,29 +93,30 @@ export const sendProfileOtp = async (userId, identifier) => {
   const user = await User.findById(userId);
   if (!user) throw new Error("User not found");
 
-  const trimmed = String(identifier).trim();
-  const isMail = isEmail(trimmed);
-  const target = isMail ? trimmed.toLowerCase() : normalizePhone(trimmed);
+  const { isMail, target } = normalizeIdentifier(identifier);
+  const contactType = inferContactType(
+    user,
+    target,
+    isMail,
+    options.contactType || "",
+  );
 
-  // ensure target not used by another user
-  if (isMail) {
-    const other = await User.findOne({ email: target, _id: { $ne: userId } });
-    if (other) throw new Error("Email already in use");
-  } else {
-    const other = await User.findOne({ phoneNumber: target, _id: { $ne: userId } });
-    if (other) throw new Error("Phone number already in use");
-  }
+  await ensureIdentifierAvailable(userId, target, isMail);
 
-  // Generate OTP and save hash on user
   const otp = generateOTP();
-  const otpHash = await bcrypt.hash(otp, 12);
-
-  user.otpHash = otpHash;
+  user.otpHash = await bcrypt.hash(otp, 12);
   user.otpExpires = Date.now() + otpConfig.otpExpiryMinutes * 60 * 1000;
   user.otpAttempts = 0;
 
-  // store pending field (do not overwrite primary until verification)
-  if (isMail) {
+  if (contactType === "recovery") {
+    if (isMail) {
+      user.pendingRecoveryEmail = target;
+      user.pendingRecoveryEmailRequestedAt = new Date();
+    } else {
+      user.pendingRecoveryPhone = target;
+      user.pendingRecoveryPhoneRequestedAt = new Date();
+    }
+  } else if (isMail) {
     user.pendingEmail = target;
     user.pendingEmailRequestedAt = new Date();
   } else {
@@ -61,7 +126,6 @@ export const sendProfileOtp = async (userId, identifier) => {
 
   await user.save();
 
-  // send OTP
   if (isMail) {
     await sendVerifyOtpEmail({
       to: target,
@@ -73,10 +137,30 @@ export const sendProfileOtp = async (userId, identifier) => {
     await sendSMS(target, otp);
   }
 
-  return true;
+  await logSecurityEvent({
+    userId: user._id,
+    actorId: user._id,
+    eventType: SECURITY_EVENT_TYPES.CONTACT_VERIFICATION_REQUESTED,
+    metadata: {
+      contactType,
+      channel: isMail ? "email" : "phone",
+      target,
+    },
+  });
+
+  return {
+    success: true,
+    contactType,
+    target,
+  };
 };
 
-export const confirmProfileOtp = async (userId, identifier, otp) => {
+export const confirmProfileOtp = async (
+  userId,
+  identifier,
+  otp,
+  options = {},
+) => {
   const otpConfig = await getProfileOtpConfig();
 
   if (!userId) throw new Error("User id required");
@@ -92,51 +176,92 @@ export const confirmProfileOtp = async (userId, identifier, otp) => {
     throw new Error("OTP expired");
   }
 
+  const { isMail, target } = normalizeIdentifier(identifier);
   const isMatch = await bcrypt.compare(String(otp), user.otpHash);
   if (!isMatch) {
     user.otpAttempts = (user.otpAttempts || 0) + 1;
     if (user.otpAttempts >= otpConfig.otpMaxRetries) {
-      user.isLocked = true;
+      user.lockUntil = Date.now() + otpConfig.lockTimeMs;
     }
     await user.save();
     throw new Error("Invalid OTP");
   }
 
-  // OTP ok -> apply the pending identifier (only if it matches)
-  const trimmed = String(identifier).trim();
-  const isMail = isEmail(trimmed);
-  const target = isMail ? trimmed.toLowerCase() : normalizePhone(trimmed);
+  let applied = false;
+  let eventType = "";
 
-  // If the user has a pendingEmail/Phone and it matches the requested identifier, apply it.
-  if (isMail) {
-    if (user.pendingEmail && user.pendingEmail === target) {
-      user.email = target;
-      user.emailVerified = true;
-      user.pendingEmail = undefined;
-      user.pendingEmailRequestedAt = undefined;
-    } else {
-      // The confirm identifier doesn't match the pending one; still allow if you want:
-      // For safety, require that the identifier matches pendingEmail
-      throw new Error("No pending email to verify or identifier mismatch");
-    }
-  } else {
-    if (user.pendingPhone && user.pendingPhone === target) {
-      user.phoneNumber = target;
-      user.phoneVerified = true;
-      user.pendingPhone = undefined;
-      user.pendingPhoneRequestedAt = undefined;
-    } else {
-      throw new Error("No pending phone to verify or identifier mismatch");
-    }
+  if (isMail && user.pendingEmail && user.pendingEmail === target) {
+    user.email = target;
+    user.emailVerified = true;
+    user.pendingEmail = undefined;
+    user.pendingEmailRequestedAt = undefined;
+    applied = true;
+    eventType = SECURITY_EVENT_TYPES.EMAIL_CHANGED;
+  } else if (!isMail && user.pendingPhone && user.pendingPhone === target) {
+    user.phoneNumber = target;
+    user.phoneVerified = true;
+    user.pendingPhone = undefined;
+    user.pendingPhoneRequestedAt = undefined;
+    applied = true;
+    eventType = SECURITY_EVENT_TYPES.PHONE_CHANGED;
+  } else if (isMail && user.pendingRecoveryEmail && user.pendingRecoveryEmail === target) {
+    const isNew = !user.recoveryEmail;
+    user.recoveryEmail = target;
+    user.recoveryEmailVerified = true;
+    user.pendingRecoveryEmail = "";
+    user.pendingRecoveryEmailRequestedAt = undefined;
+    applied = true;
+    eventType = isNew
+      ? SECURITY_EVENT_TYPES.RECOVERY_EMAIL_ADDED
+      : SECURITY_EVENT_TYPES.RECOVERY_EMAIL_CHANGED;
+  } else if (
+    !isMail &&
+    user.pendingRecoveryPhone &&
+    user.pendingRecoveryPhone === target
+  ) {
+    const isNew = !user.recoveryPhone;
+    user.recoveryPhone = target;
+    user.recoveryPhoneVerified = true;
+    user.pendingRecoveryPhone = "";
+    user.pendingRecoveryPhoneRequestedAt = undefined;
+    applied = true;
+    eventType = isNew
+      ? SECURITY_EVENT_TYPES.RECOVERY_PHONE_ADDED
+      : SECURITY_EVENT_TYPES.RECOVERY_PHONE_CHANGED;
   }
 
-  // clear otp fields
+  if (!applied) {
+    throw new Error("No pending contact to verify or identifier mismatch");
+  }
+
   user.otpHash = undefined;
   user.otpExpires = undefined;
   user.otpAttempts = 0;
-  user.lastLogin = user.lastLogin || Date.now();
 
   await user.save();
+
+  await logSecurityEvent({
+    userId: user._id,
+    actorId: user._id,
+    eventType,
+    metadata: {
+      target,
+      contactType:
+        eventType.includes("recovery") ? "recovery" : "primary",
+    },
+  });
+
+  if (eventType.includes("recovery")) {
+    await logSecurityEvent({
+      userId: user._id,
+      actorId: user._id,
+      eventType: SECURITY_EVENT_TYPES.RECOVERY_CONTACT_VERIFIED,
+      metadata: {
+        target,
+        channel: isMail ? "email" : "phone",
+      },
+    });
+  }
 
   return true;
 };
