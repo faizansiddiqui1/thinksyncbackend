@@ -18,6 +18,7 @@ const DEFAULT_DRAFT_TTL_HOURS = Math.max(
   Number(process.env.BOOKING_DRAFT_TTL_HOURS || 24),
 );
 const DEFAULT_GST_PERCENTAGE = 18;
+const MAX_BOOKING_ADVANCE_MONTHS = 1;
 
 function normalizeDraftStage(value = "checkout") {
   const stage = safeString(value || "checkout").toLowerCase();
@@ -38,6 +39,69 @@ function normalizePlan(value = "daily") {
 
 function buildDraftExpiryDate(baseDate = new Date()) {
   return new Date(baseDate.getTime() + DEFAULT_DRAFT_TTL_HOURS * 60 * 60 * 1000);
+}
+
+function startOfDay(date) {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+}
+
+function endOfDay(date) {
+  const normalized = new Date(date);
+  normalized.setHours(23, 59, 59, 999);
+  return normalized;
+}
+
+function getMaxAdvanceBookingDate(baseDate = new Date()) {
+  const source = startOfDay(baseDate);
+  const sourceDay = source.getDate();
+  const targetMonth = source.getMonth() + MAX_BOOKING_ADVANCE_MONTHS;
+  const lastDayOfTargetMonth = new Date(
+    source.getFullYear(),
+    targetMonth + 1,
+    0,
+  ).getDate();
+  const safeDay = Math.min(sourceDay, lastDayOfTargetMonth);
+  return endOfDay(new Date(source.getFullYear(), targetMonth, safeDay));
+}
+
+function addMonths(date, months = 1) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date) {
+  return endOfDay(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+function isSameCalendarDay(first, second) {
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate()
+  );
+}
+
+function isCompleteAllowedCalendarMonthBooking(startDateTime, endDateTime, baseDate = new Date()) {
+  if (!startDateTime || !endDateTime) return false;
+
+  const normalizedStart = startOfDay(startDateTime);
+  const normalizedEnd = endOfDay(endDateTime);
+  const currentMonthStart = startOfMonth(baseDate);
+  const nextMonthStart = addMonths(currentMonthStart, 1);
+  const allowedMonthStarts = [currentMonthStart, nextMonthStart];
+
+  return allowedMonthStarts.some((monthStart) => {
+    const monthEnd = endOfMonth(monthStart);
+    return (
+      isSameCalendarDay(normalizedStart, monthStart) &&
+      isSameCalendarDay(normalizedEnd, monthEnd)
+    );
+  });
 }
 
 function safeString(value = "") {
@@ -105,6 +169,15 @@ function hasCheckoutSelection(materialized = {}) {
   );
 }
 
+function hasBookingWindowSelection(materialized = {}) {
+  return Boolean(
+    materialized &&
+      materialized?.space?.spaceId &&
+      materialized?.selection?.startDateTime &&
+      materialized?.selection?.endDateTime,
+  );
+}
+
 function buildDraftMatchingSignature(source = {}) {
   const resources = Array.isArray(source?.resources) ? source.resources : [];
   const addons = Array.isArray(source?.addons) ? source.addons : [];
@@ -145,6 +218,36 @@ function buildDraftMatchingSignature(source = {}) {
         qty: toInteger(item?.quantity || item?.qty, 1),
       }))
       .sort((left, right) => `${left.id}:${left.qty}`.localeCompare(`${right.id}:${right.qty}`)),
+  });
+}
+
+function buildDraftHoldSignature(source = {}) {
+  const primaryItem = source?.selection?.primaryItem || null;
+
+  return JSON.stringify({
+    stage: hasBookingWindowSelection(source)
+      ? normalizeDraftStage(source?.draftStage || source?.stage)
+      : "",
+    purchaseIntent:
+      safeString(source?.selection?.purchaseIntent || source?.purchaseIntent).toUpperCase() ===
+      "PLAN_MEMBERSHIP"
+        ? "PLAN_MEMBERSHIP"
+        : "BOOKING",
+    spaceId: String(source?.space?.spaceId || source?.spaceId || ""),
+    startDateTime: source?.selection?.startDateTime
+      ? new Date(source.selection.startDateTime).toISOString()
+      : source?.startDateTime
+        ? new Date(source.startDateTime).toISOString()
+        : "",
+    endDateTime: source?.selection?.endDateTime
+      ? new Date(source.selection.endDateTime).toISOString()
+      : source?.endDateTime
+        ? new Date(source.endDateTime).toISOString()
+        : "",
+    primaryItem: {
+      source: safeString(primaryItem?.source).toLowerCase(),
+      id: String(primaryItem?.id || ""),
+    },
   });
 }
 
@@ -477,6 +580,16 @@ async function buildDraftMaterializedState(input = {}) {
 
   const normalizedStart = startDateTime ? new Date(startDateTime) : null;
   const normalizedEnd = endDateTime ? new Date(endDateTime) : null;
+  const maxAdvanceBookingDate = getMaxAdvanceBookingDate(new Date());
+  const hasMonthlyChargeLine = chargeLines.some(
+    (line) => normalizePlan(line?.planType || line?.type) === "monthly",
+  );
+  const isCompleteCalendarMonthBooking =
+    bookingType === "monthly" &&
+    hasMonthlyChargeLine &&
+    normalizedStart &&
+    normalizedEnd &&
+    isCompleteAllowedCalendarMonthBooking(normalizedStart, normalizedEnd);
 
   if (
     requiresBookingWindow &&
@@ -490,6 +603,25 @@ async function buildDraftMaterializedState(input = {}) {
       buildValidationIssue(
         "time_range_invalid",
         "The selected booking window is invalid.",
+        { field: "selection.endDateTime", severity: "error" },
+      ),
+    );
+  }
+
+  if (
+    requiresBookingWindow &&
+    normalizedStart &&
+    normalizedEnd &&
+    Number.isFinite(normalizedStart.getTime()) &&
+    Number.isFinite(normalizedEnd.getTime()) &&
+    !isCompleteCalendarMonthBooking &&
+    (normalizedStart.getTime() > maxAdvanceBookingDate.getTime() ||
+      normalizedEnd.getTime() > maxAdvanceBookingDate.getTime())
+  ) {
+    issues.push(
+      buildValidationIssue(
+        "time_range_exceeds_advance_window",
+        "Bookings can only be made up to 1 month in advance.",
         { field: "selection.endDateTime", severity: "error" },
       ),
     );
@@ -727,7 +859,7 @@ async function adoptResumableCheckoutBooking(draft) {
     return null;
   }
 
-  const draftSignature = buildDraftMatchingSignature(draft);
+  const draftHoldSignature = buildDraftHoldSignature(draft);
 
   const candidates = await Booking.find({
     "user.userId": normalizeObjectId(draft.owner.userId),
@@ -745,7 +877,7 @@ async function adoptResumableCheckoutBooking(draft) {
   const matchingBooking =
     candidates.find((booking) => {
       if (!canRetryExistingBooking(booking)) return false;
-      return buildDraftMatchingSignature({
+      return buildDraftHoldSignature({
         draftStage: "checkout",
         space: {
           spaceId: booking.space,
@@ -763,9 +895,7 @@ async function adoptResumableCheckoutBooking(draft) {
                 }
               : null,
         },
-        resources: booking.resources || [],
-        addons: booking.addons || [],
-      }) === draftSignature;
+      }) === draftHoldSignature;
     }) || null;
 
   if (!matchingBooking) {
@@ -983,7 +1113,7 @@ export async function createBookingDraftForActor(actor, payload = {}) {
   });
   const now = new Date();
 
-  if (hasCheckoutSelection(materialized)) {
+  if (hasBookingWindowSelection(materialized)) {
     const activeDrafts = await BookingDraft.find({
       ...scope,
       status: "active",
@@ -991,10 +1121,14 @@ export async function createBookingDraftForActor(actor, payload = {}) {
       "space.spaceId": materialized?.space?.spaceId,
     }).sort({ lastActivityAt: -1, updatedAt: -1 });
 
+    const exactSignature = buildDraftMatchingSignature(materialized);
+    const holdSignature = buildDraftHoldSignature(materialized);
     const reusableDraft =
       activeDrafts.find(
-        (existingDraft) =>
-          buildDraftMatchingSignature(existingDraft) === buildDraftMatchingSignature(materialized),
+        (existingDraft) => buildDraftMatchingSignature(existingDraft) === exactSignature,
+      ) ||
+      activeDrafts.find(
+        (existingDraft) => buildDraftHoldSignature(existingDraft) === holdSignature,
       ) || null;
 
     if (reusableDraft) {
@@ -1109,9 +1243,9 @@ export async function updateBookingDraftForActor(
         : draft.specialRequests,
     owner: actor,
   });
-  const previousSignature = buildDraftMatchingSignature(draft);
-  const nextSignature = buildDraftMatchingSignature(materialized);
-  const bookingSelectionChanged = previousSignature !== nextSignature;
+  const previousHoldSignature = buildDraftHoldSignature(draft);
+  const nextHoldSignature = buildDraftHoldSignature(materialized);
+  const bookingSelectionChanged = previousHoldSignature !== nextHoldSignature;
 
   draft.status = "active";
   draft.draftStage = materialized.draftStage;

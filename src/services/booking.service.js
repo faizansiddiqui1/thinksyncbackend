@@ -29,6 +29,71 @@ import {
   sendShortTermBookingAccessEmail,
 } from "./mail.service.js";
 
+const MAX_BOOKING_ADVANCE_MONTHS = 1;
+
+function startOfDay(date) {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+}
+
+function endOfDay(date) {
+  const normalized = new Date(date);
+  normalized.setHours(23, 59, 59, 999);
+  return normalized;
+}
+
+function getMaxAdvanceBookingDate(baseDate = new Date()) {
+  const source = startOfDay(baseDate);
+  const sourceDay = source.getDate();
+  const targetMonth = source.getMonth() + MAX_BOOKING_ADVANCE_MONTHS;
+  const lastDayOfTargetMonth = new Date(
+    source.getFullYear(),
+    targetMonth + 1,
+    0,
+  ).getDate();
+  const safeDay = Math.min(sourceDay, lastDayOfTargetMonth);
+  return endOfDay(new Date(source.getFullYear(), targetMonth, safeDay));
+}
+
+function addMonths(date, months = 1) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date) {
+  return endOfDay(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+function isSameCalendarDay(first, second) {
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate()
+  );
+}
+
+function isCompleteAllowedCalendarMonthBooking(startDateTime, endDateTime, baseDate = new Date()) {
+  if (!startDateTime || !endDateTime) return false;
+
+  const normalizedStart = startOfDay(startDateTime);
+  const normalizedEnd = endOfDay(endDateTime);
+  const currentMonthStart = startOfMonth(baseDate);
+  const nextMonthStart = addMonths(currentMonthStart, 1);
+  const allowedMonthStarts = [currentMonthStart, nextMonthStart];
+
+  return allowedMonthStarts.some((monthStart) => {
+    const monthEnd = endOfMonth(monthStart);
+    return (
+      isSameCalendarDay(normalizedStart, monthStart) &&
+      isSameCalendarDay(normalizedEnd, monthEnd)
+    );
+  });
+}
+
 function dispatchBookingConfirmationEmail(
   booking,
   failureMessage = "booking confirmation email failed:",
@@ -103,6 +168,28 @@ export const createBooking = async (bookingData, tenantIdOverride = null) => {
       new Date(endDateTime) <= new Date(startDateTime)
     ) {
       return { success: false, error: "Valid booking start and end time are required" };
+    }
+
+    const maxAdvanceBookingDate = getMaxAdvanceBookingDate(new Date());
+    const requestedBookingType = String(
+      bookingData.bookingType || plan?.type || "daily",
+    ).toLowerCase();
+    const isCompleteCalendarMonthBooking =
+      requestedBookingType === "monthly" &&
+      isCompleteAllowedCalendarMonthBooking(
+        new Date(startDateTime),
+        new Date(endDateTime),
+      );
+
+    const exceedsAdvanceWindow =
+      new Date(startDateTime).getTime() > maxAdvanceBookingDate.getTime() ||
+      new Date(endDateTime).getTime() > maxAdvanceBookingDate.getTime();
+
+    if (!isCompleteCalendarMonthBooking && exceedsAdvanceWindow) {
+      return {
+        success: false,
+        error: "Bookings can only be made up to 1 month in advance",
+      };
     }
 
     const {
@@ -704,6 +791,22 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       };
     }
 
+    const bookingType = String(bookingData?.bookingType || "daily").toLowerCase();
+    const maxAdvanceBookingDate = getMaxAdvanceBookingDate(new Date());
+    const exceedsAdvanceWindow =
+      startDateTime.getTime() > maxAdvanceBookingDate.getTime() ||
+      endDateTime.getTime() > maxAdvanceBookingDate.getTime();
+    const isCompleteCalendarMonthBooking =
+      bookingType === "monthly" &&
+      isCompleteAllowedCalendarMonthBooking(startDateTime, endDateTime);
+
+    if (!isCompleteCalendarMonthBooking && exceedsAdvanceWindow) {
+      return {
+        success: false,
+        error: "Bookings can only be made up to 1 month in advance",
+      };
+    }
+
     for (const resource of normalizedResources) {
       const availability = await Booking.checkAvailability(
         resource.resourceId,
@@ -731,8 +834,6 @@ export const createInternalWorkspaceBooking = async (bookingData, authUser) => {
       Number(bookingData?.priceBreakdown?.totalAmount || bookingData?.totalAmount || 0) ||
       subtotal + gstAmount;
     const paymentReference = `internal_${new mongoose.Types.ObjectId()}`;
-    const bookingType = String(bookingData?.bookingType || "daily").toLowerCase();
-
     const booking = await Booking.create({
       user: {
         userId: authUser._id,
