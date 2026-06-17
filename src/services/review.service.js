@@ -11,6 +11,11 @@ const PAID_BOOKING_FILTER = {
   ],
 };
 
+const REVIEW_PROMPT_SNOOZE_DAYS = Math.max(
+  1,
+  Number(process.env.REVIEW_PROMPT_SNOOZE_DAYS || 7),
+);
+
 function normalizePositiveInt(value, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -349,6 +354,18 @@ export async function createReview({
     }).lean();
 
     if (existingReview) {
+      await Booking.updateOne(
+        { _id: booking._id },
+        {
+          $set: {
+            reviewSubmitted: true,
+            reviewNotificationPending: false,
+            reviewPromptDismissedAt: new Date(),
+            reviewPromptSnoozedUntil: null,
+          },
+        },
+      );
+
       return {
         success: false,
         error: "Review already exists for this booking",
@@ -372,6 +389,8 @@ export async function createReview({
         $set: {
           reviewSubmitted: true,
           reviewNotificationPending: false,
+          reviewPromptDismissedAt: new Date(),
+          reviewPromptSnoozedUntil: null,
         },
       },
     );
@@ -389,12 +408,42 @@ export async function createReview({
 
 export async function getPendingReviewPrompts(userId) {
   try {
+    const existingReviewBookingIds = await Review.distinct("booking", {
+      user: userId,
+      booking: { $ne: null },
+    });
+
+    if (existingReviewBookingIds.length) {
+      await Booking.updateMany(
+        {
+          _id: { $in: existingReviewBookingIds },
+          "user.userId": userId,
+          reviewSubmitted: { $ne: true },
+        },
+        {
+          $set: {
+            reviewSubmitted: true,
+            reviewNotificationPending: false,
+            reviewPromptDismissedAt: new Date(),
+            reviewPromptSnoozedUntil: null,
+          },
+        },
+      );
+    }
+
+    const now = new Date();
     const bookings = await Booking.find({
       "user.userId": userId,
       status: "completed",
       ...PAID_BOOKING_FILTER,
       reviewSubmitted: false,
       reviewNotificationPending: true,
+      _id: { $nin: existingReviewBookingIds },
+      $or: [
+        { reviewPromptSnoozedUntil: null },
+        { reviewPromptSnoozedUntil: { $exists: false } },
+        { reviewPromptSnoozedUntil: { $lte: now } },
+      ],
     })
       .populate("space", "name slug address timezone spaceType")
       .sort({ endDateTime: -1 })
@@ -409,6 +458,69 @@ export async function getPendingReviewPrompts(userId) {
         bookingDate: booking.startDateTime || booking.bookingDuration?.startDate,
         booking,
       })),
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function dismissReviewPrompt({
+  userId,
+  bookingId,
+  snoozeDays = REVIEW_PROMPT_SNOOZE_DAYS,
+}) {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(String(bookingId || ""))) {
+      return { success: false, error: "Invalid booking id" };
+    }
+
+    const existingReview = await Review.findOne({
+      booking: bookingId,
+      user: userId,
+    }).lean();
+
+    const now = new Date();
+    const snoozedUntil = new Date(
+      now.getTime() + Math.max(1, Number(snoozeDays || REVIEW_PROMPT_SNOOZE_DAYS)) * 24 * 60 * 60 * 1000,
+    );
+
+    const update = existingReview
+      ? {
+          reviewSubmitted: true,
+          reviewNotificationPending: false,
+          reviewPromptDismissedAt: now,
+          reviewPromptSnoozedUntil: null,
+        }
+      : {
+          reviewPromptDismissedAt: now,
+          reviewPromptSnoozedUntil: snoozedUntil,
+        };
+
+    const booking = await Booking.findOneAndUpdate(
+      {
+        _id: bookingId,
+        "user.userId": userId,
+        status: "completed",
+        ...PAID_BOOKING_FILTER,
+      },
+      { $set: update },
+      { new: true },
+    ).lean();
+
+    if (!booking) {
+      return {
+        success: false,
+        error: "Review prompt is no longer available for this booking",
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        bookingId: booking._id,
+        snoozedUntil: booking.reviewPromptSnoozedUntil,
+        reviewSubmitted: Boolean(booking.reviewSubmitted),
+      },
     };
   } catch (error) {
     return { success: false, error: error.message };

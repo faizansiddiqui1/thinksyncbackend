@@ -74,6 +74,8 @@ const draftResourceSchema = new Schema(
     type: { type: String, default: "" },
     quantity: { type: Number, default: 1, min: 1 },
     unitPriceSnapshot: { type: Number, default: 0, min: 0 },
+    bookingType: { type: String, default: "" },
+    bundleId: { type: String, default: "" },
   },
   { _id: false },
 );
@@ -89,6 +91,8 @@ const draftAddonSchema = new Schema(
     type: { type: String, default: "" },
     quantity: { type: Number, default: 1, min: 1 },
     unitPriceSnapshot: { type: Number, default: 0, min: 0 },
+    bookingType: { type: String, default: "" },
+    bundleId: { type: String, default: "" },
   },
   { _id: false },
 );

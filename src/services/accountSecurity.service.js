@@ -261,12 +261,17 @@ export async function touchTrustedDevice(user, trustedDeviceToken = "") {
   await user.save();
 }
 
-export async function createTwoFactorLoginChallenge(user, sessionMeta = {}) {
+export async function createTwoFactorLoginChallenge(
+  user,
+  sessionMeta = {},
+  extraPayload = {},
+) {
   const config = await getSecurityConfig();
   const payload = {
     userId: String(user._id),
     purpose: "two_factor_login",
     sessionMeta: normalizeSessionMeta(sessionMeta),
+    ...extraPayload,
   };
 
   return jwt.sign(payload, config.accessSecret, {

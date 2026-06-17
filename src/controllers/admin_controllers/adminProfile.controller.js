@@ -2,14 +2,11 @@ import {
   getAdminProfileAggregate,
   updateAdminProfileOperational,
 } from "../../services/adminProfile.service.js";
+import { hasAdminPortalAccess } from "../../utils/authSession.js";
 
 export const getAdminProfileHandler = async (req, res) => {
   try {
-    const hasAdminContext =
-      ["pending_admin", "admin", "super_admin", "consultant"].includes(req.user?.role) ||
-      (Array.isArray(req.user?.customRoles) && req.user.customRoles.length > 0);
-
-    if (!hasAdminContext) {
+    if (!hasAdminPortalAccess(req.user)) {
       return res.status(403).json({
         success: false,
         message: "Admin profile access denied",

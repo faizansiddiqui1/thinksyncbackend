@@ -30,6 +30,11 @@ import {
   logSecurityEvent,
   SECURITY_EVENT_TYPES,
 } from "./securityEvent.service.js";
+import {
+  AUTH_SESSION_SCOPES,
+  isAdminAuthIntent,
+  resolveSessionScope,
+} from "../utils/authSession.js";
 
 async function getAuthRuntimeConfig() {
   const values = await getPlatformConfigValues([
@@ -301,6 +306,7 @@ async function maybeStartTwoFactorChallenge(
   company,
   sessionMeta = {},
   trustedDeviceToken = "",
+  sessionScope = AUTH_SESSION_SCOPES.USER,
 ) {
   if (!user?.securityPreferences?.twoFactorEnabled) {
     return null;
@@ -312,7 +318,9 @@ async function maybeStartTwoFactorChallenge(
     return null;
   }
 
-  const challengeToken = await createTwoFactorLoginChallenge(user, sessionMeta);
+  const challengeToken = await createTwoFactorLoginChallenge(user, sessionMeta, {
+    sessionScope,
+  });
   return {
     requiresTwoFactor: true,
     challengeToken,
@@ -325,20 +333,20 @@ async function maybeStartTwoFactorChallenge(
 export async function finalizeAuthenticatedSession(
   user,
   sessionMeta = {},
-  { company = null } = {},
+  { company = null, sessionScope = AUTH_SESSION_SCOPES.USER } = {},
 ) {
   const authConfig = await getAuthRuntimeConfig();
   const normalizedSession = sessionMeta || {};
   const lastLoginBefore = user.lastLogin || null;
 
   const accessToken = jwt.sign(
-    { userId: user._id },
+    { userId: user._id, sessionScope },
     authConfig.accessSecret,
     { expiresIn: authConfig.accessExpiry },
   );
 
   const refreshToken = jwt.sign(
-    { userId: user._id },
+    { userId: user._id, sessionScope },
     authConfig.refreshSecret,
     { expiresIn: authConfig.refreshExpiry },
   );
@@ -401,6 +409,7 @@ export async function finalizeAuthenticatedSession(
   return {
     accessToken,
     refreshToken,
+    sessionScope,
     user,
     company: company || user.companyId || null,
   };
@@ -479,8 +488,9 @@ export const sendOtp = async ({
       throw new Error("Admin account not found");
     }
 
-    const allowedRoles = ["pending_admin", "admin", "super_admin", "consultant"];
-    const hasAdminRoleAccess = allowedRoles.includes(user.role);
+    const hasAdminRoleAccess =
+      ["pending_admin", "admin", "super_admin", "consultant"].includes(user.role) ||
+      Boolean(user.companyId);
     const hasRbacAdminAccess = await hasAssignedRbacPermissions(user);
 
     if (!hasAdminRoleAccess && !hasRbacAdminAccess) {
@@ -584,6 +594,7 @@ export const loginWithPassword = async ({
 
   const { isMail, email, phone } = resolveIdentifier(identifier);
   const normalizedIntent = String(intent || "login").trim().toLowerCase();
+  const sessionScope = resolveSessionScope({ intent: normalizedIntent });
   let user = await findUserByIdentifier({ isMail, email, phone });
 
   if (normalizedIntent === "admin-login") {
@@ -633,8 +644,9 @@ export const loginWithPassword = async ({
   }
 
   if (normalizedIntent === "admin-login") {
-    const allowedRoles = ["pending_admin", "admin", "super_admin", "consultant"];
-    const hasAdminRoleAccess = allowedRoles.includes(user.role);
+    const hasAdminRoleAccess =
+      ["pending_admin", "admin", "super_admin", "consultant"].includes(user.role) ||
+      Boolean(user.companyId);
     const hasRbacAdminAccess = await hasAssignedRbacPermissions(user);
     if (!hasAdminRoleAccess && !hasRbacAdminAccess) {
       throw new Error("You are not authorized for admin login");
@@ -646,6 +658,7 @@ export const loginWithPassword = async ({
     user.companyId || null,
     sessionMeta,
     trustedDeviceToken,
+    sessionScope,
   );
 
   if (twoFactorPending) {
@@ -655,6 +668,7 @@ export const loginWithPassword = async ({
 
   return finalizeAuthenticatedSession(user, sessionMeta, {
     company: user.companyId || null,
+    sessionScope,
   });
 };
 
@@ -685,6 +699,7 @@ export const completeTwoFactorLogin = async (
     await touchTrustedDevice(user, trustedDeviceToken);
     return finalizeAuthenticatedSession(user, payload.sessionMeta || {}, {
       company: user.companyId || null,
+      sessionScope: payload.sessionScope || AUTH_SESSION_SCOPES.USER,
     });
   }
 
@@ -704,6 +719,7 @@ export const completeTwoFactorLogin = async (
 
   const result = await finalizeAuthenticatedSession(user, payload.sessionMeta || {}, {
     company: user.companyId || null,
+    sessionScope: payload.sessionScope || AUTH_SESSION_SCOPES.USER,
   });
 
   return {
@@ -778,13 +794,15 @@ export const verifyOTPAndCreateTokens = async (
   const normalizedIntent = String(options.intent || "")
     .trim()
     .toLowerCase();
+  const sessionScope = resolveSessionScope({ intent: normalizedIntent });
 
-  const isAdminFlow = ["admin", "admin-login", "admin-signup"].includes(
-    normalizedIntent,
-  );
+  const isAdminFlow = isAdminAuthIntent(normalizedIntent);
 
   const isAdminRoleUser =
-    user.role === "admin" || user.role === "super_admin" || user.role === "consultant";
+    user.role === "admin" ||
+    user.role === "super_admin" ||
+    user.role === "consultant" ||
+    Boolean(user.companyId);
   const shouldEnsureAdminProfile = user.role === "admin" || user.role === "super_admin";
   const isPendingAdminUser = user.role === "pending_admin";
   const isCustomRbacUser = await hasAssignedRbacPermissions(user);
@@ -817,6 +835,7 @@ export const verifyOTPAndCreateTokens = async (
     user.companyId || null,
     sessionMeta,
     options.trustedDeviceToken || "",
+    sessionScope,
   );
   if (twoFactorPending) {
     await user.save();
@@ -825,5 +844,6 @@ export const verifyOTPAndCreateTokens = async (
 
   return finalizeAuthenticatedSession(user, sessionMeta, {
     company: user.companyId || null,
+    sessionScope,
   });
 };

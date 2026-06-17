@@ -13,10 +13,12 @@ import {
   getTwoFactorStatusHandler,
   login,
   logout,
+  logoutAdmin,
   logoutAllDevices,
   logoutSessionById,
   passwordLogin,
   passwordSignup,
+  refreshAdminAccessToken,
   refreshAccessToken,
   regenerateBackupCodesHandler,
   requestPasswordResetHandler,
@@ -46,11 +48,14 @@ router.post("/auth/forgot-password/request", otpSendRateLimiter, requestPassword
 router.post("/auth/forgot-password/verify", generalRateLimiter, verifyPasswordResetHandler);
 router.post("/auth/forgot-password/reset", generalRateLimiter, resetPasswordHandler);
 router.post("/refresh-token", refreshAccessToken);
+router.post("/admin/refresh-token", refreshAdminAccessToken);
 router.post("/logout", logout);
+router.post("/admin/logout", logoutAdmin);
 
 router.get("/sessions", requireAuth, getActiveSessions);
 router.delete("/sessions/:sessionId", requireAuth, logoutSessionById);
 router.post("/logout-all", requireAuth, logoutAllDevices);
+router.post("/admin/logout-all", requireAuth, logoutAllDevices);
 router.get("/auth/2fa/status", requireAuth, getTwoFactorStatusHandler);
 router.post("/auth/2fa/enroll/start", requireAuth, startTwoFactorEnrollmentHandler);
 router.post("/auth/2fa/enroll/verify", requireAuth, enableTwoFactorEnrollmentHandler);

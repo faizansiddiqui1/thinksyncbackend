@@ -43,6 +43,27 @@ export const getMyPendingReviews = async (req, res) => {
   }
 };
 
+export const dismissReviewPrompt = async (req, res) => {
+  try {
+    const result = await reviewService.dismissReviewPrompt({
+      userId: req.user._id,
+      bookingId: req.params.bookingId,
+      snoozeDays: req.body?.snoozeDays,
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
 export const getReview = async (req, res) => {
   try {
     const { id } = req.params;

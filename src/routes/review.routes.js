@@ -3,6 +3,7 @@ import {
   addResponse,
   createReview,
   deleteReview,
+  dismissReviewPrompt,
   flagReview,
   getAdminReviews,
   getAdminReviewSummary,
@@ -26,6 +27,7 @@ import { reviewValidation } from "../middlewares/validations.js";
 const router = express.Router();
 
 router.get("/me/pending", requireAuth, getMyPendingReviews);
+router.post("/me/pending/:bookingId/dismiss", requireAuth, dismissReviewPrompt);
 
 router.get(
   "/admin/list",

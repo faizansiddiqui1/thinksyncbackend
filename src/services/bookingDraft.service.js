@@ -30,11 +30,18 @@ function normalizeDraftStage(value = "checkout") {
 
 function normalizePlan(value = "daily") {
   const normalized = String(value || "daily").trim().toLowerCase();
+  if (normalized === "mixed") return "mixed";
   if (["hour", "hours", "hr", "hrs"].includes(normalized)) return "hourly";
   if (["day", "days"].includes(normalized)) return "daily";
   if (["week", "weeks"].includes(normalized)) return "weekly";
   if (["month", "months"].includes(normalized)) return "monthly";
   return normalized || "daily";
+}
+
+function normalizeOptionalPlan(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return normalizePlan(normalized);
 }
 
 function buildDraftExpiryDate(baseDate = new Date()) {
@@ -274,6 +281,8 @@ function normalizeDraftLineItems(lineItems = []) {
         source,
         name: safeString(line?.name || "Booking item"),
         type: safeString(line?.type || source),
+        bookingType: normalizeOptionalPlan(line?.bookingType || line?.planType),
+        planType: normalizeOptionalPlan(line?.planType || line?.bookingType),
         qty: toInteger(line?.qty, 1),
         unit: toPositiveNumber(line?.unit, 0),
         detail: safeString(line?.detail),
@@ -295,6 +304,8 @@ function normalizeRequestedResources(resources = []) {
         name: safeString(resource?.name),
         type: safeString(resource?.type),
         quantity: toInteger(resource?.quantity || resource?.qty, 1),
+        bookingType: normalizeOptionalPlan(resource?.bookingType || resource?.planType),
+        bundleId: safeString(resource?.bundleId),
         unitPriceSnapshot: toPositiveNumber(
           resource?.unitPriceSnapshot ?? resource?.unitPrice ?? resource?.price,
           0,
@@ -317,6 +328,8 @@ function normalizeRequestedAddons(addons = []) {
         name: safeString(addon?.name || addon?.title),
         type: safeString(addon?.type),
         quantity: toInteger(addon?.quantity || addon?.qty, 1),
+        bookingType: normalizeOptionalPlan(addon?.bookingType || addon?.planType),
+        bundleId: safeString(addon?.bundleId),
         unitPriceSnapshot: toPositiveNumber(
           addon?.unitPriceSnapshot ?? addon?.unitPrice ?? addon?.price,
           0,
@@ -439,8 +452,12 @@ async function buildDraftMaterializedState(input = {}) {
 
   const normalizedResources = resources.map((requested) => {
     const catalog = resourceMap.get(String(requested.resourceId));
+    const resourceBookingType =
+      requested.bookingType && requested.bookingType !== "mixed"
+        ? requested.bookingType
+        : bookingType;
     const unitPrice = toPositiveNumber(
-      catalog?.prices?.[bookingType],
+      catalog?.prices?.[resourceBookingType],
       requested.unitPriceSnapshot,
     );
 
@@ -455,14 +472,18 @@ async function buildDraftMaterializedState(input = {}) {
           },
         ),
       );
-    } else if (!Number.isFinite(Number(catalog?.prices?.[bookingType]))) {
+    } else if (
+      resourceBookingType !== "mixed" &&
+      !Number.isFinite(Number(catalog?.prices?.[resourceBookingType])) &&
+      !Number.isFinite(Number(requested.unitPriceSnapshot))
+    ) {
       issues.push(
         buildValidationIssue(
           "resource_price_missing",
-          `${catalog.name || requested.name || "A resource"} no longer supports ${bookingType} booking.`,
+          `${catalog.name || requested.name || "A resource"} no longer supports ${resourceBookingType} booking.`,
           {
             field: "resources",
-            meta: { resourceId: String(requested.resourceId), bookingType },
+            meta: { resourceId: String(requested.resourceId), bookingType: resourceBookingType },
           },
         ),
       );
@@ -474,6 +495,8 @@ async function buildDraftMaterializedState(input = {}) {
       type: safeString(catalog?.type || requested.type),
       quantity: requested.quantity,
       unitPriceSnapshot: unitPrice,
+      bookingType: resourceBookingType,
+      bundleId: requested.bundleId,
     };
   });
 
@@ -525,6 +548,8 @@ async function buildDraftMaterializedState(input = {}) {
       type: safeString(catalog?.type || requested.type),
       quantity: requested.quantity,
       unitPriceSnapshot: unitPrice,
+      bookingType: requested.bookingType,
+      bundleId: requested.bundleId,
     };
   });
 
@@ -537,8 +562,10 @@ async function buildDraftMaterializedState(input = {}) {
 
     if (line.source === "resource") {
       const catalog = resourceMap.get(String(line.refId));
-      if (catalog?.prices?.[bookingType] != null) {
-        nextUnit = toPositiveNumber(catalog.prices[bookingType], nextUnit);
+      const linePlan = normalizeOptionalPlan(line?.bookingType || line?.planType);
+      const lineBookingType = linePlan && linePlan !== "mixed" ? linePlan : bookingType;
+      if (lineBookingType !== "mixed" && catalog?.prices?.[lineBookingType] != null) {
+        nextUnit = toPositiveNumber(catalog.prices[lineBookingType], nextUnit);
       }
     }
 
@@ -590,6 +617,7 @@ async function buildDraftMaterializedState(input = {}) {
     normalizedStart &&
     normalizedEnd &&
     isCompleteAllowedCalendarMonthBooking(normalizedStart, normalizedEnd);
+  const hasMixedMonthlyBundle = bookingType === "mixed" && hasMonthlyChargeLine;
 
   if (
     requiresBookingWindow &&
@@ -615,6 +643,7 @@ async function buildDraftMaterializedState(input = {}) {
     Number.isFinite(normalizedStart.getTime()) &&
     Number.isFinite(normalizedEnd.getTime()) &&
     !isCompleteCalendarMonthBooking &&
+    !hasMixedMonthlyBundle &&
     (normalizedStart.getTime() > maxAdvanceBookingDate.getTime() ||
       normalizedEnd.getTime() > maxAdvanceBookingDate.getTime())
   ) {
@@ -627,12 +656,18 @@ async function buildDraftMaterializedState(input = {}) {
     );
   }
 
+  const hasSegmentLevelAvailability =
+    requiresBookingWindow &&
+    Array.isArray(input?.selection?.bookingSegments) &&
+    input.selection.bookingSegments.some((segment) => segment?.resourceId);
+
   if (
     requiresBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     Number.isFinite(normalizedStart.getTime()) &&
-    Number.isFinite(normalizedEnd.getTime())
+    Number.isFinite(normalizedEnd.getTime()) &&
+    !hasSegmentLevelAvailability
   ) {
     for (const resource of normalizedResources) {
       const availability = await Booking.checkAvailability(
@@ -653,6 +688,66 @@ async function buildDraftMaterializedState(input = {}) {
             },
           ),
         );
+      }
+    }
+  }
+
+  if (hasSegmentLevelAvailability) {
+    const segmentsByResource = new Map();
+    for (const segment of input.selection.bookingSegments || []) {
+      const resourceId = normalizeObjectId(segment?.resourceId);
+      const segmentStart = segment?.startDateTime || segment?.start || null;
+      const segmentEnd = segment?.endDateTime || segment?.end || null;
+      if (!resourceId || !segmentStart || !segmentEnd) continue;
+
+      const key = String(resourceId);
+      if (!segmentsByResource.has(key)) segmentsByResource.set(key, []);
+      segmentsByResource.get(key).push({
+        resourceId,
+        start: new Date(segmentStart),
+        end: new Date(segmentEnd),
+      });
+    }
+
+    for (const [resourceKey, segments] of segmentsByResource.entries()) {
+      const resource = normalizedResources.find(
+        (item) => String(item.resourceId) === String(resourceKey),
+      );
+      for (const segment of segments) {
+        if (
+          !Number.isFinite(segment.start.getTime()) ||
+          !Number.isFinite(segment.end.getTime()) ||
+          segment.end <= segment.start
+        ) {
+          issues.push(
+            buildValidationIssue(
+              "segment_time_range_invalid",
+              "One of the selected booking windows is invalid.",
+              { field: "selection.bookingSegments", severity: "error" },
+            ),
+          );
+          continue;
+        }
+
+        const availability = await Booking.checkAvailability(
+          segment.resourceId,
+          segment.start,
+          segment.end,
+          existingCheckoutBookingId || null,
+        );
+
+        if (!availability.available) {
+          issues.push(
+            buildValidationIssue(
+              "resource_unavailable",
+              `${resource?.name || "A selected resource"} is no longer available for one of the chosen slots.`,
+              {
+                field: "resources",
+                meta: { resourceId: String(segment.resourceId) },
+              },
+            ),
+          );
+        }
       }
     }
   }

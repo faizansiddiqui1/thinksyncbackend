@@ -5,6 +5,10 @@ import User from "../models/user_models/User.js";
 import AdminProfile from "../models/admin_models/AdminProfile.js";
 import Role from "../models/super_admin_models/Role.js"; // adjust path
 import { getPlatformConfigValues } from "../services/platformConfigResolver.service.js";
+import {
+  AUTH_SESSION_SCOPES,
+  hasAdminPortalAccess,
+} from "../utils/authSession.js";
 
 const COMPANY_RESOURCE_PERMISSION_ALLOWLIST = new Set([
   "dashboard_analytics",
@@ -42,6 +46,7 @@ export const requireAuth = async (req, res, next) => {
         .json({ message: "Invalid token or user disabled" });
 
     req.user = user;
+    req.authSessionScope = payload.sessionScope || AUTH_SESSION_SCOPES.USER;
     return next();
   } catch (err) {
     return res.status(401).json({ message: "Invalid or expired token" });
@@ -60,7 +65,10 @@ export const optionalAuth = async (req, res, next) => {
     const user = await User.findById(payload.userId).select(
       "_id email role isActive companyId",
     );
-    if (user && user.isActive) req.user = user;
+    if (user && user.isActive) {
+      req.user = user;
+      req.authSessionScope = payload.sessionScope || AUTH_SESSION_SCOPES.USER;
+    }
     return next();
   } catch (err) {
     return next();
@@ -186,6 +194,22 @@ export const requireAdminAccess = async (req, res, next) => {
 
     return res.status(403).json({ message: "Admin panel access denied" });
 
+  } catch (err) {
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const requireAdminPortalAuth = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!hasAdminPortalAccess(req.user)) {
+      return res.status(403).json({ message: "Admin portal access denied" });
+    }
+
+    return next();
   } catch (err) {
     return res.status(500).json({ message: "Server error" });
   }

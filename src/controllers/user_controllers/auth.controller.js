@@ -31,12 +31,20 @@ import {
   SECURITY_EVENT_TYPES,
 } from "../../services/securityEvent.service.js";
 import {
+  clearRefreshSessionCookies,
+  getRefreshCookieName,
+  getRefreshCookieNamesForScope,
   getRefreshCookieOptions,
   getTrustedDeviceCookieOptions,
+  LEGACY_REFRESH_COOKIE_NAME,
   TRUSTED_DEVICE_COOKIE,
 } from "../../utils/cookieUtils.js";
 import { getPlatformConfigValues } from "../../services/platformConfigResolver.service.js";
 import { attachGuestBookingDraftsToUser } from "./bookingDraft.controller.js";
+import {
+  AUTH_SESSION_SCOPES,
+  resolveSessionScope,
+} from "../../utils/authSession.js";
 
 function getSessionMeta(req) {
   return {
@@ -59,9 +67,49 @@ function clearTrustedDeviceCookie(res) {
   res.clearCookie(TRUSTED_DEVICE_COOKIE, getTrustedDeviceCookieOptions());
 }
 
+function applyRefreshSessionCookie(
+  res,
+  refreshToken,
+  sessionScope = AUTH_SESSION_SCOPES.USER,
+) {
+  if (!refreshToken) return;
+  clearRefreshSessionCookies(res, sessionScope);
+  res.cookie(
+    getRefreshCookieName(sessionScope),
+    refreshToken,
+    getRefreshCookieOptions(),
+  );
+}
+
+function getRefreshTokenFromRequest(
+  req,
+  sessionScope = AUTH_SESSION_SCOPES.USER,
+) {
+  const cookieNames = getRefreshCookieNamesForScope(sessionScope);
+
+  for (const name of cookieNames) {
+    const value = req.cookies?.[name];
+    if (value) {
+      return { token: value, cookieName: name, usedLegacyCookie: false };
+    }
+  }
+
+  const legacyToken = req.cookies?.[LEGACY_REFRESH_COOKIE_NAME];
+  if (legacyToken) {
+    return {
+      token: legacyToken,
+      cookieName: LEGACY_REFRESH_COOKIE_NAME,
+      usedLegacyCookie: true,
+    };
+  }
+
+  return { token: "", cookieName: "", usedLegacyCookie: false };
+}
+
 function buildAuthSuccessPayload(result = {}, extra = {}) {
   return {
     accessToken: result.accessToken,
+    sessionScope: result.sessionScope || AUTH_SESSION_SCOPES.USER,
     user: result.user?.toJSON?.() || result.user,
     company: result.company || null,
     ...extra,
@@ -171,7 +219,11 @@ export const passwordLogin = async (req, res) => {
       });
     }
 
-    res.cookie("refreshToken", result.refreshToken, getRefreshCookieOptions());
+    applyRefreshSessionCookie(
+      res,
+      result.refreshToken,
+      result.sessionScope || resolveSessionScope({ intent }),
+    );
     return res.status(200).json(buildAuthSuccessPayload(result));
   } catch (error) {
     return res.status(401).json({ message: error.message });
@@ -206,7 +258,11 @@ export const verifyOtp = async (req, res) => {
 
     const draftMigration = await attachGuestBookingDraftsToUser(req, result.user?._id);
 
-    res.cookie("refreshToken", result.refreshToken, getRefreshCookieOptions());
+    applyRefreshSessionCookie(
+      res,
+      result.refreshToken,
+      result.sessionScope || resolveSessionScope({ intent }),
+    );
     return res.status(200).json(
       buildAuthSuccessPayload(result, {
         bookingDraftsMigrated: Number(draftMigration?.updatedCount || 0),
@@ -235,7 +291,11 @@ export const verifyTwoFactorLoginHandler = async (req, res) => {
       },
     );
 
-    res.cookie("refreshToken", result.refreshToken, getRefreshCookieOptions());
+    applyRefreshSessionCookie(
+      res,
+      result.refreshToken,
+      result.sessionScope || AUTH_SESSION_SCOPES.USER,
+    );
     applyTrustedDeviceCookie(res, result.trustedDevice || null);
 
     return res.status(200).json(buildAuthSuccessPayload(result));
@@ -412,9 +472,24 @@ export const revokeTrustedDeviceHandler = async (req, res) => {
   }
 };
 
-export const refreshAccessToken = async (req, res) => {
+async function refreshAccessTokenByScope(
+  req,
+  res,
+  sessionScope = AUTH_SESSION_SCOPES.USER,
+) {
   try {
-    const oldRefreshToken = req.cookies?.refreshToken;
+    const {
+      token: oldRefreshToken,
+      usedLegacyCookie,
+    } = getRefreshTokenFromRequest(req, sessionScope);
+
+    if (usedLegacyCookie) {
+      clearRefreshSessionCookies(res, sessionScope);
+      return res.status(401).json({
+        message: "Session expired. Please login again.",
+      });
+    }
+
     if (!oldRefreshToken) {
       return res.status(401).json({ message: "Unauthorized" });
     }
@@ -426,6 +501,12 @@ export const refreshAccessToken = async (req, res) => {
       "JWT_REFRESH_EXPIRY",
     ]);
     const payload = jwt.verify(oldRefreshToken, authConfig.JWT_REFRESH_SECRET);
+    const tokenSessionScope = payload.sessionScope || AUTH_SESSION_SCOPES.USER;
+
+    if (tokenSessionScope !== sessionScope) {
+      clearRefreshSessionCookies(res, sessionScope);
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const oldTokenHash = crypto
       .createHash("sha256")
@@ -446,13 +527,13 @@ export const refreshAccessToken = async (req, res) => {
     );
 
     const newAccessToken = jwt.sign(
-      { userId: user._id },
+      { userId: user._id, sessionScope },
       authConfig.JWT_ACCESS_SECRET,
       { expiresIn: authConfig.JWT_ACCESS_EXPIRY || "60m" },
     );
 
     const newRefreshToken = jwt.sign(
-      { userId: user._id },
+      { userId: user._id, sessionScope },
       authConfig.JWT_REFRESH_SECRET,
       { expiresIn: authConfig.JWT_REFRESH_EXPIRY || "7d" },
     );
@@ -473,18 +554,28 @@ export const refreshAccessToken = async (req, res) => {
 
     await user.save();
 
-    res.cookie("refreshToken", newRefreshToken, getRefreshCookieOptions());
-    return res.json({ accessToken: newAccessToken });
+    applyRefreshSessionCookie(res, newRefreshToken, sessionScope);
+    return res.json({ accessToken: newAccessToken, sessionScope });
   } catch (error) {
     return res.status(401).json({
       message: "Invalid or expired refresh token",
     });
   }
-};
+}
+
+export const refreshAccessToken = async (req, res) =>
+  refreshAccessTokenByScope(req, res, AUTH_SESSION_SCOPES.USER);
+
+export const refreshAdminAccessToken = async (req, res) =>
+  refreshAccessTokenByScope(req, res, AUTH_SESSION_SCOPES.ADMIN);
 
 export const getActiveSessions = async (req, res) => {
   const user = await User.findById(req.user._id).select("+refreshTokens");
-  const currentRefreshToken = req.cookies?.refreshToken || "";
+  const currentRefreshToken =
+    getRefreshTokenFromRequest(
+      req,
+      req.authSessionScope || AUTH_SESSION_SCOPES.USER,
+    ).token || "";
   const currentTokenHash = currentRefreshToken
     ? crypto.createHash("sha256").update(currentRefreshToken).digest("hex")
     : "";
@@ -548,7 +639,10 @@ export const logoutAllDevices = async (req, res) => {
       { $set: { refreshTokens: [] } },
     );
 
-    res.clearCookie("refreshToken", getRefreshCookieOptions());
+    clearRefreshSessionCookies(res, AUTH_SESSION_SCOPES.USER);
+    clearRefreshSessionCookies(res, AUTH_SESSION_SCOPES.ADMIN, {
+      clearLegacy: false,
+    });
     clearTrustedDeviceCookie(res);
 
     await logSecurityEvent({
@@ -568,11 +662,12 @@ export const logoutAllDevices = async (req, res) => {
   }
 };
 
-export const logout = async (req, res) => {
+async function logoutByScope(req, res, sessionScope = AUTH_SESSION_SCOPES.USER) {
   try {
-    const refreshToken = req.cookies?.refreshToken;
+    const { token: refreshToken } = getRefreshTokenFromRequest(req, sessionScope);
 
     if (!refreshToken) {
+      clearRefreshSessionCookies(res, sessionScope);
       clearTrustedDeviceCookie(res);
       return res.sendStatus(204);
     }
@@ -587,11 +682,17 @@ export const logout = async (req, res) => {
       { $pull: { refreshTokens: { token: tokenHash } } },
     );
 
-    res.clearCookie("refreshToken", getRefreshCookieOptions());
+    clearRefreshSessionCookies(res, sessionScope);
     clearTrustedDeviceCookie(res);
 
     return res.sendStatus(204);
   } catch (error) {
     return res.status(500).json({ message: "Logout failed" });
   }
-};
+}
+
+export const logout = async (req, res) =>
+  logoutByScope(req, res, AUTH_SESSION_SCOPES.USER);
+
+export const logoutAdmin = async (req, res) =>
+  logoutByScope(req, res, AUTH_SESSION_SCOPES.ADMIN);

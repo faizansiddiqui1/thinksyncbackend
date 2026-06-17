@@ -23,6 +23,7 @@ import {
 } from "../controllers/admin_controllers/verification.controller.js";
 import {
   requireAdminAccess,
+  requireAdminPortalAuth,
   requireAuth,
   requirePermission,
 } from "../middlewares/auth.js";
@@ -64,8 +65,13 @@ router.post("/kyc/save", requireAuth, saveKycImage);
 
 router.get("/kyc/status", requireAuth, getKycStatus);
 
-// Super admin routes
-router.get("/kyc/admin/status", requireAuth, getAdminKycStatusHandler);
+// Admin portal self-status route
+router.get(
+  "/kyc/admin/status",
+  requireAuth,
+  requireAdminPortalAuth,
+  getAdminKycStatusHandler,
+);
 
 // Admin review routes for target user KYC
 const requireKycReview = [

@@ -259,7 +259,7 @@ const bookingSchema = new Schema(
 
     bookingType: {
       type: String,
-      enum: ["hourly", "daily", "weekly", "monthly"],
+      enum: ["hourly", "daily", "weekly", "monthly", "mixed"],
       required: true,
       index: true,
     },
@@ -560,6 +560,18 @@ const bookingSchema = new Schema(
     reviewNotificationPending: {
       type: Boolean,
       default: false,
+      index: true,
+    },
+
+    reviewPromptDismissedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    reviewPromptSnoozedUntil: {
+      type: Date,
+      default: null,
       index: true,
     },
   },

@@ -10,6 +10,7 @@ import {
   evaluateKycRequirements,
   syncAdminKycApproval,
 } from "../../services/kycApproval.service.js";
+import { hasAdminPortalAccess } from "../../utils/authSession.js";
 
 /** ensure nested object exists */
 export function ensureField(obj, field) {
@@ -44,6 +45,13 @@ async function getSelfHealingGlobalKycConfig() {
 
 export async function getAdminKycStatusHandler(req, res) {
   try {
+    if (!hasAdminPortalAccess(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Admin portal access denied",
+      });
+    }
+
     let user = await User.findById(req.user._id).populate({
       path: "customRoles",
       select: "name permissions",
