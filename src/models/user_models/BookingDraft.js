@@ -59,6 +59,10 @@ const draftSelectionSchema = new Schema(
       type: Schema.Types.Mixed,
       default: null,
     },
+    sourceCartDraftIds: {
+      type: [Schema.Types.ObjectId],
+      default: [],
+    },
   },
   { _id: false },
 );
@@ -145,6 +149,22 @@ const draftCheckoutSchema = new Schema(
   { _id: false },
 );
 
+const draftCartLifecycleSchema = new Schema(
+  {
+    state: {
+      type: String,
+      enum: ["ACTIVE", "UNAVAILABLE", "EXPIRED", "REMOVED", "CHECKOUT_COMPLETED"],
+      default: "ACTIVE",
+      index: true,
+    },
+    reason: { type: String, default: "" },
+    message: { type: String, default: "" },
+    checkedAt: { type: Date, default: null },
+    updatedAt: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
 const bookingDraftSchema = new Schema(
   {
     owner: {
@@ -196,6 +216,10 @@ const bookingDraftSchema = new Schema(
       type: draftCheckoutSchema,
       default: () => ({}),
     },
+    cartLifecycle: {
+      type: draftCartLifecycleSchema,
+      default: () => ({}),
+    },
     version: {
       type: Number,
       default: 0,
@@ -238,5 +262,6 @@ bookingDraftSchema.index({ "owner.guestToken": 1, status: 1, lastActivityAt: -1 
 bookingDraftSchema.index({ "owner.userId": 1, draftStage: 1, status: 1, lastActivityAt: -1 });
 bookingDraftSchema.index({ "owner.guestToken": 1, draftStage: 1, status: 1, lastActivityAt: -1 });
 bookingDraftSchema.index({ status: 1, expiresAt: 1 });
+bookingDraftSchema.index({ "cartLifecycle.state": 1, updatedAt: 1 });
 
 export default mongoose.model("BookingDraft", bookingDraftSchema);

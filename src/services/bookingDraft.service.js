@@ -19,6 +19,17 @@ const DEFAULT_DRAFT_TTL_HOURS = Math.max(
 );
 const DEFAULT_GST_PERCENTAGE = 18;
 const MAX_BOOKING_ADVANCE_MONTHS = 1;
+const CART_CLEANUP_DAYS = Math.max(
+  1,
+  Number(process.env.CART_DRAFT_CLEANUP_DAYS || 10),
+);
+const CART_LIFECYCLE = Object.freeze({
+  ACTIVE: "ACTIVE",
+  UNAVAILABLE: "UNAVAILABLE",
+  EXPIRED: "EXPIRED",
+  REMOVED: "REMOVED",
+  CHECKOUT_COMPLETED: "CHECKOUT_COMPLETED",
+});
 
 function normalizeDraftStage(value = "checkout") {
   const stage = safeString(value || "checkout").toLowerCase();
@@ -158,6 +169,17 @@ function buildValidationIssue(code, message, extra = {}) {
   };
 }
 
+function normalizeLifecycleReason(code = "") {
+  const normalized = safeString(code).toUpperCase();
+  if (!normalized) return "";
+  if (normalized.includes("PRICE")) return "PRICE_CHANGED";
+  if (normalized.includes("STOCK")) return "ADDON_STOCK_CHANGED";
+  if (normalized.includes("RESOURCE")) return "RESOURCE_UNAVAILABLE";
+  if (normalized.includes("ADDON")) return "ADDON_UNAVAILABLE";
+  if (normalized.includes("TIME") || normalized.includes("SEGMENT")) return "BOOKING_WINDOW_INVALID";
+  return normalized;
+}
+
 function canRetryExistingBooking(booking = null) {
   return Boolean(
     booking &&
@@ -258,8 +280,176 @@ function buildDraftHoldSignature(source = {}) {
   });
 }
 
+function toIsoDateSignature(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+}
+
+function getHoldResourceIds(source = {}) {
+  const resources = Array.isArray(source?.resources) ? source.resources : [];
+  return Array.from(
+    new Set(
+      resources
+        .map((item) => String(item?.resourceId || item?.id || "").trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+}
+
+function getHoldSegments(source = {}) {
+  const selection = source?.selection || {};
+  const segments = Array.isArray(selection?.bookingSegments)
+    ? selection.bookingSegments
+    : Array.isArray(source?.bookingSegments)
+      ? source.bookingSegments
+      : [];
+  const resourceIds = getHoldResourceIds(source);
+  const globalStart = toIsoDateSignature(selection?.startDateTime || source?.startDateTime);
+  const globalEnd = toIsoDateSignature(selection?.endDateTime || source?.endDateTime);
+
+  const segmentKeys = segments
+    .map((segment) => {
+      const resourceId = String(segment?.resourceId || segment?.id || "").trim();
+      const start = toIsoDateSignature(segment?.startDateTime || segment?.start);
+      const end = toIsoDateSignature(segment?.endDateTime || segment?.end);
+      if (!resourceId || !start || !end) return "";
+      return `${resourceId}:${start}:${end}`;
+    })
+    .filter(Boolean);
+
+  if (segmentKeys.length) {
+    return Array.from(new Set(segmentKeys)).sort();
+  }
+
+  return resourceIds
+    .map((resourceId) =>
+      resourceId && globalStart && globalEnd ? `${resourceId}:${globalStart}:${globalEnd}` : "",
+    )
+    .filter(Boolean)
+    .sort();
+}
+
+function buildCheckoutHoldFingerprint(source = {}) {
+  const selection = source?.selection || {};
+
+  return JSON.stringify({
+    purchaseIntent:
+      safeString(selection?.purchaseIntent || source?.purchaseIntent).toUpperCase() ===
+      "PLAN_MEMBERSHIP"
+        ? "PLAN_MEMBERSHIP"
+        : "BOOKING",
+    spaceId: String(source?.space?.spaceId || source?.space || source?.spaceId || ""),
+    startDateTime: toIsoDateSignature(selection?.startDateTime || source?.startDateTime),
+    endDateTime: toIsoDateSignature(selection?.endDateTime || source?.endDateTime),
+    resources: getHoldResourceIds(source),
+    segments: getHoldSegments(source),
+  });
+}
+
 function isBlockingIssue(issue = {}) {
   return issue?.blocking !== false;
+}
+
+function isLifecycleBlockingIssue(issue = {}) {
+  return isBlockingIssue(issue) || safeString(issue?.code).toLowerCase() === "price_changed";
+}
+
+function getLifecycleIssue(materialized = {}) {
+  const issues = Array.isArray(materialized?.validation?.issues)
+    ? materialized.validation.issues
+    : [];
+  return issues.find(isLifecycleBlockingIssue) || null;
+}
+
+function getDraftCartLifecycle(draft = {}, materialized = null, now = new Date()) {
+  const status = safeString(draft?.status).toLowerCase();
+  const stage = normalizeDraftStage(draft?.draftStage || draft?.stage);
+  const expiresAt = draft?.expiresAt ? new Date(draft.expiresAt) : null;
+  const checkedAt = now;
+
+  if (status === "completed" || stage === "completed") {
+    return {
+      state: CART_LIFECYCLE.CHECKOUT_COMPLETED,
+      reason: "CHECKOUT_COMPLETED",
+      message: "This saved bundle has already moved through checkout.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  if (status === "cancelled" || stage === "cancelled") {
+    return {
+      state: CART_LIFECYCLE.REMOVED,
+      reason: normalizeLifecycleReason(draft?.cancelReason || "REMOVED"),
+      message: "This saved bundle was removed from cart.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  if (
+    status === "expired" ||
+    (expiresAt && Number.isFinite(expiresAt.getTime()) && expiresAt.getTime() <= now.getTime())
+  ) {
+    return {
+      state: CART_LIFECYCLE.EXPIRED,
+      reason: "EXPIRED",
+      message: "This saved bundle expired. Please choose a fresh time before checkout.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  const hasWindow = Boolean(draft?.selection?.startDateTime && draft?.selection?.endDateTime);
+  if (!hasWindow) {
+    return {
+      state: CART_LIFECYCLE.UNAVAILABLE,
+      reason: "BOOKING_WINDOW_MISSING",
+      message: "Select a booking date and time before checkout.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  const issue = getLifecycleIssue(materialized);
+  if (issue) {
+    return {
+      state: CART_LIFECYCLE.UNAVAILABLE,
+      reason: normalizeLifecycleReason(issue.code || "UNAVAILABLE"),
+      message:
+        safeString(issue.message) ||
+        "This saved bundle needs review before checkout.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  if (materialized?.validation?.state && materialized.validation.state !== "valid") {
+    return {
+      state: CART_LIFECYCLE.UNAVAILABLE,
+      reason: "REVIEW_REQUIRED",
+      message: "This saved bundle needs review before checkout.",
+      checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
+
+  return {
+    state: CART_LIFECYCLE.ACTIVE,
+    reason: "",
+    message: "",
+    checkedAt,
+    updatedAt: checkedAt,
+  };
+}
+
+function hasLifecycleChanged(current = {}, next = {}) {
+  return (
+    safeString(current?.state) !== safeString(next?.state) ||
+    safeString(current?.reason) !== safeString(next?.reason) ||
+    safeString(current?.message) !== safeString(next?.message)
+  );
 }
 
 function buildGuestDraftToken() {
@@ -594,8 +784,11 @@ async function buildDraftMaterializedState(input = {}) {
   }
 
   const requiresBookingWindow = draftStage !== "cart";
+  const hasPartialBookingWindowSelection = Boolean(startDateTime || endDateTime);
+  const shouldValidateBookingWindow =
+    requiresBookingWindow || hasPartialBookingWindowSelection;
 
-  if (requiresBookingWindow && (!startDateTime || !endDateTime)) {
+  if (shouldValidateBookingWindow && (!startDateTime || !endDateTime)) {
     issues.push(
       buildValidationIssue(
         "time_range_missing",
@@ -620,7 +813,7 @@ async function buildDraftMaterializedState(input = {}) {
   const hasMixedMonthlyBundle = bookingType === "mixed" && hasMonthlyChargeLine;
 
   if (
-    requiresBookingWindow &&
+    shouldValidateBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     (!Number.isFinite(normalizedStart.getTime()) ||
@@ -637,7 +830,22 @@ async function buildDraftMaterializedState(input = {}) {
   }
 
   if (
-    requiresBookingWindow &&
+    shouldValidateBookingWindow &&
+    normalizedStart &&
+    Number.isFinite(normalizedStart.getTime()) &&
+    normalizedStart.getTime() < Date.now()
+  ) {
+    issues.push(
+      buildValidationIssue(
+        "time_range_past",
+        "This saved booking time has passed. Please choose a new time before checkout.",
+        { field: "selection.startDateTime", severity: "error" },
+      ),
+    );
+  }
+
+  if (
+    shouldValidateBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     Number.isFinite(normalizedStart.getTime()) &&
@@ -657,12 +865,12 @@ async function buildDraftMaterializedState(input = {}) {
   }
 
   const hasSegmentLevelAvailability =
-    requiresBookingWindow &&
+    shouldValidateBookingWindow &&
     Array.isArray(input?.selection?.bookingSegments) &&
     input.selection.bookingSegments.some((segment) => segment?.resourceId);
 
   if (
-    requiresBookingWindow &&
+    shouldValidateBookingWindow &&
     normalizedStart &&
     normalizedEnd &&
     Number.isFinite(normalizedStart.getTime()) &&
@@ -816,7 +1024,7 @@ async function buildDraftMaterializedState(input = {}) {
   const validationState =
     !normalizedLineItems.length ||
     !spaceId ||
-    (requiresBookingWindow && (!startDateTime || !endDateTime))
+    (shouldValidateBookingWindow && (!startDateTime || !endDateTime))
       ? "incomplete"
       : issues.some(isBlockingIssue)
       ? "invalid"
@@ -954,43 +1162,46 @@ async function adoptResumableCheckoutBooking(draft) {
     return null;
   }
 
-  const draftHoldSignature = buildDraftHoldSignature(draft);
+  const draftHoldFingerprint = buildCheckoutHoldFingerprint(draft);
+  const checkoutBookingId = normalizeObjectId(draft?.checkout?.bookingId || null);
+  const startDateTime = new Date(draft.selection.startDateTime);
+  const endDateTime = new Date(draft.selection.endDateTime);
+  const candidateOr = [
+    {
+      startDateTime: { $lt: endDateTime },
+      endDateTime: { $gt: startDateTime },
+    },
+  ];
+
+  if (checkoutBookingId) {
+    candidateOr.push({ _id: checkoutBookingId });
+  }
+
+  if (draft?._id) {
+    candidateOr.push({ sourceDraftId: draft._id });
+  }
 
   const candidates = await Booking.find({
     "user.userId": normalizeObjectId(draft.owner.userId),
     space: normalizeObjectId(draft?.space?.spaceId),
-    bookingType: normalizePlan(draft?.selection?.bookingType),
     purchaseIntent:
       draft?.selection?.purchaseIntent === "PLAN_MEMBERSHIP" ? "PLAN_MEMBERSHIP" : "BOOKING",
-    startDateTime: new Date(draft.selection.startDateTime),
-    endDateTime: new Date(draft.selection.endDateTime),
     status: {
       $in: ["draft", "pending_payment", "payment_processing"],
     },
+    $or: candidateOr,
   }).sort({ updatedAt: -1, createdAt: -1 });
 
   const matchingBooking =
     candidates.find((booking) => {
       if (!canRetryExistingBooking(booking)) return false;
-      return buildDraftHoldSignature({
-        draftStage: "checkout",
-        space: {
-          spaceId: booking.space,
-        },
-        selection: {
-          bookingType: booking.bookingType,
-          startDateTime: booking.startDateTime,
-          endDateTime: booking.endDateTime,
-          purchaseIntent: booking.purchaseIntent || "BOOKING",
-          primaryItem:
-            Array.isArray(booking.resources) && booking.resources[0]
-              ? {
-                  source: "resource",
-                  id: String(booking.resources[0].resourceId || ""),
-                }
-              : null,
-        },
-      }) === draftHoldSignature;
+      if (draft?._id && String(booking?.sourceDraftId || "") === String(draft._id)) {
+        return true;
+      }
+      if (checkoutBookingId && String(booking?._id || "") === String(checkoutBookingId)) {
+        return true;
+      }
+      return buildCheckoutHoldFingerprint(booking) === draftHoldFingerprint;
     }) || null;
 
   if (!matchingBooking) {
@@ -1106,10 +1317,16 @@ export async function listBookingDraftsForActor(
 
   const normalizedLimit = Math.max(1, Math.min(50, Number(limit || 10)));
   let resolvedPage = Math.max(1, Number(page || 1));
+  const normalizedStage = draftStage ? normalizeDraftStage(draftStage) : "";
+  const normalizedStatus = safeString(status).toLowerCase();
   const baseQuery = {
     ...scope,
-    ...(status ? { status } : {}),
-    ...(draftStage ? { draftStage: normalizeDraftStage(draftStage) } : {}),
+    ...(status
+      ? normalizedStage === "cart" && normalizedStatus === "active"
+        ? { status: { $in: ["active", "expired"] } }
+        : { status }
+      : {}),
+    ...(normalizedStage ? { draftStage: normalizedStage } : {}),
   };
 
   if (focusId && mongoose.Types.ObjectId.isValid(focusId)) {
@@ -1131,11 +1348,49 @@ export async function listBookingDraftsForActor(
     resolvedPage = totalPages;
   }
 
-  const drafts = await BookingDraft.find(baseQuery)
+  const draftDocs = await BookingDraft.find(baseQuery)
     .sort({ lastActivityAt: -1, updatedAt: -1 })
     .skip((resolvedPage - 1) * normalizedLimit)
-    .limit(normalizedLimit)
-    .lean();
+    .limit(normalizedLimit);
+
+  const drafts =
+    normalizedStage === "cart"
+      ? await Promise.all(
+          draftDocs.map(async (draft) => {
+            const serialized = serializeDraftDocument(draft);
+            const materialized = await buildDraftMaterializedState(serialized);
+            const lifecycle = getDraftCartLifecycle(draft, materialized);
+            const existingLifecycle =
+              draft.cartLifecycle?.toObject
+                ? draft.cartLifecycle.toObject()
+                : draft.cartLifecycle || {};
+
+            draft.validation = materialized.validation;
+            draft.pricingSummary = materialized.pricingSummary;
+            draft.cartLifecycle = lifecycle;
+            if (
+              lifecycle.state === CART_LIFECYCLE.EXPIRED &&
+              String(draft.status || "").toLowerCase() === "active"
+            ) {
+              draft.status = "expired";
+            }
+
+            if (
+              hasLifecycleChanged(existingLifecycle, lifecycle) ||
+              String(draft.validation?.state || "") !== String(materialized.validation?.state || "")
+            ) {
+              draft.version = Number(draft.version || 0) + 1;
+              await draft.save();
+            }
+
+            return {
+              ...serializeDraftDocument(draft),
+              livePricingSummary: materialized.pricingSummary,
+              validation: materialized.validation,
+            };
+          }),
+        )
+      : draftDocs.map((draft) => serializeDraftDocument(draft));
 
   return {
     success: true,
@@ -1234,6 +1489,20 @@ export async function createBookingDraftForActor(actor, payload = {}) {
       reusableDraft.pricingSummary = materialized.pricingSummary;
       reusableDraft.specialRequests = materialized.specialRequests;
       reusableDraft.validation = materialized.validation;
+      reusableDraft.cartLifecycle =
+        materialized.draftStage === "cart"
+          ? getDraftCartLifecycle(
+              {
+                ...serializeDraftDocument(reusableDraft),
+                draftStage: materialized.draftStage,
+                status: "active",
+                selection: materialized.selection,
+                expiresAt: buildDraftExpiryDate(now),
+              },
+              materialized,
+              now,
+            )
+          : { state: CART_LIFECYCLE.ACTIVE };
       reusableDraft.checkout = {
         ...(reusableDraft.checkout?.toObject ? reusableDraft.checkout.toObject() : reusableDraft.checkout || {}),
         paymentMethod:
@@ -1268,6 +1537,19 @@ export async function createBookingDraftForActor(actor, payload = {}) {
     pricingSummary: materialized.pricingSummary,
     specialRequests: materialized.specialRequests,
     validation: materialized.validation,
+    cartLifecycle:
+      materialized.draftStage === "cart"
+        ? getDraftCartLifecycle(
+            {
+              status: "active",
+              draftStage: materialized.draftStage,
+              selection: materialized.selection,
+              expiresAt: buildDraftExpiryDate(now),
+            },
+            materialized,
+            now,
+          )
+        : { state: CART_LIFECYCLE.ACTIVE },
     checkout: {
       paymentMethod: safeString(payload?.checkout?.paymentMethod || payload?.paymentMethod || "upi") || "upi",
     },
@@ -1351,6 +1633,19 @@ export async function updateBookingDraftForActor(
   draft.pricingSummary = materialized.pricingSummary;
   draft.specialRequests = materialized.specialRequests;
   draft.validation = materialized.validation;
+  draft.cartLifecycle =
+    materialized.draftStage === "cart"
+      ? getDraftCartLifecycle(
+          {
+            ...serializeDraftDocument(draft),
+            status: "active",
+            draftStage: materialized.draftStage,
+            selection: materialized.selection,
+            expiresAt: buildDraftExpiryDate(new Date()),
+          },
+          materialized,
+        )
+      : { state: CART_LIFECYCLE.ACTIVE };
   const existingCheckout =
     draft.checkout?.toObject ? draft.checkout.toObject() : draft.checkout || {};
   draft.checkout = {
@@ -1396,6 +1691,13 @@ export async function cancelBookingDraftForActor(
   draft.draftStage = "cancelled";
   draft.cancelledAt = new Date();
   draft.cancelReason = safeString(reason || "cancelled_by_user");
+  draft.cartLifecycle = {
+    state: CART_LIFECYCLE.REMOVED,
+    reason: normalizeLifecycleReason(reason || "REMOVED"),
+    message: "This saved bundle was removed from cart.",
+    checkedAt: new Date(),
+    updatedAt: new Date(),
+  };
   draft.version = Number(draft.version || 0) + 1;
 
   await draft.save();
@@ -1586,7 +1888,7 @@ export async function markBookingDraftCompleted(sourceDraftId, paymentStatus = "
   const normalizedDraftId = normalizeObjectId(sourceDraftId);
   if (!normalizedDraftId) return null;
 
-  return BookingDraft.findByIdAndUpdate(
+  const completedDraft = await BookingDraft.findByIdAndUpdate(
     normalizedDraftId,
     {
       $set: {
@@ -1594,6 +1896,11 @@ export async function markBookingDraftCompleted(sourceDraftId, paymentStatus = "
         draftStage: "completed",
         completedAt: new Date(),
         "checkout.paymentStatus": paymentStatus,
+        "cartLifecycle.state": CART_LIFECYCLE.CHECKOUT_COMPLETED,
+        "cartLifecycle.reason": "CHECKOUT_COMPLETED",
+        "cartLifecycle.message": "This booking completed checkout.",
+        "cartLifecycle.checkedAt": new Date(),
+        "cartLifecycle.updatedAt": new Date(),
         lastActivityAt: new Date(),
       },
       $inc: {
@@ -1602,6 +1909,39 @@ export async function markBookingDraftCompleted(sourceDraftId, paymentStatus = "
     },
     { new: true },
   );
+
+  const sourceCartDraftIds = Array.isArray(completedDraft?.selection?.sourceCartDraftIds)
+    ? completedDraft.selection.sourceCartDraftIds
+        .map((id) => normalizeObjectId(id))
+        .filter(Boolean)
+    : [];
+
+  if (sourceCartDraftIds.length) {
+    await BookingDraft.updateMany(
+      {
+        _id: { $in: sourceCartDraftIds },
+        draftStage: "cart",
+      },
+      {
+        $set: {
+          status: "completed",
+          draftStage: "completed",
+          completedAt: new Date(),
+          "cartLifecycle.state": CART_LIFECYCLE.CHECKOUT_COMPLETED,
+          "cartLifecycle.reason": "CHECKOUT_COMPLETED",
+          "cartLifecycle.message": "This saved bundle completed checkout.",
+          "cartLifecycle.checkedAt": new Date(),
+          "cartLifecycle.updatedAt": new Date(),
+          lastActivityAt: new Date(),
+        },
+        $inc: {
+          version: 1,
+        },
+      },
+    );
+  }
+
+  return completedDraft;
 }
 
 export async function expireStaleBookingDrafts({ now = new Date(), batchSize = 100 } = {}) {
@@ -1616,7 +1956,15 @@ export async function expireStaleBookingDrafts({ now = new Date(), batchSize = 1
 
   for (const draft of drafts) {
     draft.status = "expired";
-    if (draft.draftStage !== "completed" && draft.draftStage !== "cancelled") {
+    if (draft.draftStage === "cart") {
+      draft.cartLifecycle = {
+        state: CART_LIFECYCLE.EXPIRED,
+        reason: "EXPIRED",
+        message: "This saved bundle expired. Please choose a fresh time before checkout.",
+        checkedAt: now,
+        updatedAt: now,
+      };
+    } else if (draft.draftStage !== "completed" && draft.draftStage !== "cancelled") {
       draft.draftStage = "cancelled";
     }
     draft.version = Number(draft.version || 0) + 1;
@@ -1624,8 +1972,22 @@ export async function expireStaleBookingDrafts({ now = new Date(), batchSize = 1
     expiredCount += 1;
   }
 
+  const cleanupCutoff = new Date(now.getTime() - CART_CLEANUP_DAYS * 24 * 60 * 60 * 1000);
+  const cleanupResult = await BookingDraft.deleteMany({
+    "cartLifecycle.state": {
+      $in: [CART_LIFECYCLE.EXPIRED, CART_LIFECYCLE.REMOVED, CART_LIFECYCLE.CHECKOUT_COMPLETED],
+    },
+    $or: [
+      { draftStage: "cart" },
+      { status: "cancelled", cancelReason: "removed_from_cart" },
+      { status: "completed", "checkout.bookingId": null },
+    ],
+    updatedAt: { $lte: cleanupCutoff },
+  });
+
   return {
     scanned: drafts.length,
     expired: expiredCount,
+    cleaned: Number(cleanupResult.deletedCount || 0),
   };
 }
