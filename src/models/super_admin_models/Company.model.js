@@ -58,11 +58,10 @@ const companySchema = new Schema(
     city: String,
     state: String,
     country: String,
-
-    // 🔹 Business Info
-    gstNumber: String,
-    cinNumber: String,
-    panNumber: String,
+    notes: {
+      type: String,
+      trim: true,
+    },
 
     // 🔹 Employees (future ready)
     employees: [

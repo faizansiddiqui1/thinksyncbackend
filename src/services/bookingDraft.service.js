@@ -122,6 +122,20 @@ function isCompleteAllowedCalendarMonthBooking(startDateTime, endDateTime, baseD
   });
 }
 
+function shouldUseStartTimeForPastBookingCheck({ bookingType = "", chargeLines = [], selection = {} } = {}) {
+  const normalizedBookingType = normalizePlan(bookingType);
+  const normalizedChargeTypes = (Array.isArray(chargeLines) ? chargeLines : [])
+    .map((line) => normalizePlan(line?.planType || line?.type))
+    .filter(Boolean);
+  const hasHourlyCharge = normalizedChargeTypes.includes("hourly");
+  const hasDateRangeCharge = normalizedChargeTypes.some((type) =>
+    ["daily", "weekly", "monthly"].includes(type),
+  );
+  const hasSelectedSlots = Array.isArray(selection?.selectedSlots) && selection.selectedSlots.length > 0;
+
+  return normalizedBookingType === "hourly" || (hasHourlyCharge && !hasDateRangeCharge) || hasSelectedSlots;
+}
+
 function safeString(value = "") {
   return String(value || "").trim();
 }
@@ -832,16 +846,29 @@ async function buildDraftMaterializedState(input = {}) {
   if (
     shouldValidateBookingWindow &&
     normalizedStart &&
+    normalizedEnd &&
     Number.isFinite(normalizedStart.getTime()) &&
-    normalizedStart.getTime() < Date.now()
+    Number.isFinite(normalizedEnd.getTime())
   ) {
-    issues.push(
-      buildValidationIssue(
-        "time_range_past",
-        "This saved booking time has passed. Please choose a new time before checkout.",
-        { field: "selection.startDateTime", severity: "error" },
-      ),
-    );
+    const nowMs = Date.now();
+    const useStartTimeForPastCheck = shouldUseStartTimeForPastBookingCheck({
+      bookingType,
+      chargeLines,
+      selection: input?.selection || {},
+    });
+    const hasPassed = useStartTimeForPastCheck
+      ? normalizedStart.getTime() < nowMs
+      : normalizedEnd.getTime() <= nowMs;
+
+    if (hasPassed) {
+      issues.push(
+        buildValidationIssue(
+          "time_range_past",
+          "This saved booking time has passed. Please choose a new time before checkout.",
+          { field: "selection.startDateTime", severity: "error" },
+        ),
+      );
+    }
   }
 
   if (
