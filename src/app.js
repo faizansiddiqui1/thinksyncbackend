@@ -285,4 +285,9 @@ startServer().catch((error) => {
   process.exit(1);
 });
 
+console.log("========== AWS CONFIG ==========");
+console.log("AWS_REGION:", process.env.AWS_REGION);
+console.log("AWS_BUCKET_NAME:", process.env.AWS_BUCKET_NAME);
+console.log("================================");
+
 export default app;
